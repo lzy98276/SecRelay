@@ -16,6 +16,7 @@ path = "src/main.rs"
 secrelay-protocol.workspace = true
 secrelay-transport.workspace = true
 secrelay-session.workspace = true
+secrelay-media.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true

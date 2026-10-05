@@ -9,16 +9,22 @@
 ## 快速开始
 
 ```bash
-cargo test --workspace          # 31 个测试
+cargo test --workspace          # 41 个测试
 cargo run -p secrelay-cli -- selftest
+
+# 屏幕采集探针（Windows 真实抓屏；其它平台加 --synthetic）
+cargo run --release -p secrelay-cli -- capture --seconds 5
 ```
 
 `selftest` 会在回环传输上验证整套会话模型：握手 → 能力协商 → 三个频道各跑一遍 → 统计 → 有序关闭。
+`capture` 量化帧率、抖动与**相邻帧变化比例** —— 实测数据见 [docs/measurements.md](docs/measurements.md)。
 
 ```bash
 cargo run -p secrelay-cli -- channels   # 打印频道模型
 cargo run -p secrelay-cli -- help
 ```
+
+> ⚠️ 性能相关的测量**必须用 release 构建**。同一采集探针 debug 11.6 fps / release 113.8 fps。
 
 ## 核心设计：一条通道 + N 种频道
 
@@ -46,10 +52,12 @@ crates/
   secrelay-protocol/    线格式、频道模型、控制消息（纯逻辑，可编译到 WASM）
   secrelay-transport/   连接抽象：ICE 直连 / 中继 / QUIC 文件通道收敛到一个 trait
   secrelay-session/     会话编排：握手、能力协商、频道管理、事件流
+  secrelay-media/       采集抽象 + 平台后端（Windows DXGI 桌面复制、合成画面源）
 apps/
-  secrelay-cli/         命令行工具与 M0 自检
+  secrelay-cli/         命令行工具、M0 自检与采集探针
 docs/
   需求分析.md            主文档：需求、平台矩阵、选型、风险、决策点
+  measurements.md       M0 探针实测记录（可复现的性能数字）
   账号系统接入.md        SECTL 账号系统（OAuth + 云存储）的可选接入设计
   research/             四份专项调研（UI 框架 / 平台能力 / 传输媒体 / Web 端）
 ```
@@ -64,10 +72,15 @@ docs/
 - 会话状态机（Init → Handshaking → Ready → Closed）与握手超时
 - 心跳自动应答、有序关闭、传输统计（含中继标记，用于中继占比 KPI）
 - 回环传输（让协议与会话逻辑可以脱离真实网络被测试）
+- **Windows 屏幕采集**（DXGI Desktop Duplication，2560x1600 实测 113.8 fps / p50 8.69ms）
+- 合成画面源（无显示器环境下可测试，且变化区域可控）
+- 帧差分度量（脏矩形差分的依据：实测相邻帧仅 0.02% 像素变化）
 
 **未实现（下一步）**
 - 真实的 ICE 打洞 / 中继兜底 / 第二条 QUIC 文件通道（D24 未定）
-- 屏幕与摄像头采集、H.264 编解码、脏矩形差分
+- H.264 编解码与**脏矩形差分实现**（探针已证明收益，尚未实现）
+- 鼠标指针合成（不合成指针的远程桌面不可用）
+- Linux / macOS / Android 的采集后端
 - 端到端加密（SFrame / Noise）、设备身份与二维码配对
 - 离线消息后端（双棘轮）
 - UI（框架由 M0 探针实测后决定，见 D6）

@@ -14,6 +14,7 @@ repository = "https://github.com/lzy98276/SecRelay"
 secrelay-protocol = { path = "crates/secrelay-protocol" }
 secrelay-transport = { path = "crates/secrelay-transport" }
 secrelay-session = { path = "crates/secrelay-session" }
+secrelay-media = { path = "crates/secrelay-media" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
