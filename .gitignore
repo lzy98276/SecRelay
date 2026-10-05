@@ -1,0 +1,23 @@
+/target
+
+# agent 协作产物（不属于项目内容）
+/.kagent
+
+# 本地配置与密钥（切勿提交）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 运行时产物
+/logs/
+*.log

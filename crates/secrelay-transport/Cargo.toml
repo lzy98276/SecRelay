@@ -1,0 +1,15 @@
+[package]
+name = "secrelay-transport"
+description = "SecRelay 连接抽象：把 ICE 直连 / 中继 / QUIC 文件通道收敛到同一个 trait 后面"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+secrelay-protocol.workspace = true
+async-trait.workspace = true
+tokio = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true

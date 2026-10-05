@@ -1,0 +1,15 @@
+[package]
+name = "secrelay-session"
+description = "SecRelay 会话编排：握手、能力协商、频道管理、事件流"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+secrelay-protocol.workspace = true
+secrelay-transport.workspace = true
+tokio = { workspace = true }
+thiserror.workspace = true
+tracing.workspace = true

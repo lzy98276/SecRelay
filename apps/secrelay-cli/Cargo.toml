@@ -1,0 +1,22 @@
+[package]
+name = "secrelay-cli"
+description = "SecRelay 命令行工具：M0 技术探针与自检"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "secrelay"
+path = "src/main.rs"
+
+[dependencies]
+secrelay-protocol.workspace = true
+secrelay-transport.workspace = true
+secrelay-session.workspace = true
+tokio = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
