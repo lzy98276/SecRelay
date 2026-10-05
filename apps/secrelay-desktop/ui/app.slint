@@ -1,0 +1,301 @@
+// SecRelay 主窗口。
+//
+// 设计约定（很重要）：
+//   **这个文件里不允许出现任何面向用户的中文字面量。**
+//   所有文案都通过属性从 Rust 侧注入，而 Rust 侧的值来自 secrelay-i18n。
+//   这样做的好处是：加一门语言只改 i18n crate，不用碰 .slint 文件。
+//
+// 命名约定：`*-label` 是字段标签，`*-text` 是动态值，其余是静态文案。
+
+import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    title: root.app-title;
+    width: 1060px;
+    height: 720px;
+    background: #15161a;
+    default-font-family: "Microsoft YaHei";
+
+    // ── 静态文案（由 Rust 从 i18n 注入）
+    in property <string> app-title: "SecRelay";
+    in property <string> tagline: "";
+    in property <string> nav-devices: "";
+    in property <string> nav-session: "";
+    in property <string> nav-settings: "";
+    in property <string> devices-title: "";
+    in property <string> devices-empty: "";
+    in property <string> devices-hint: "";
+    in property <string> session-title: "";
+    in property <string> peer-label: "";
+    in property <string> channels-label: "";
+    in property <string> capabilities-label: "";
+    in property <string> log-title: "";
+    in property <string> connect-label: "";
+    in property <string> disconnect-label: "";
+    in property <string> send-label: "";
+    in property <string> message-placeholder: "";
+    in property <string> settings-title: "";
+    in property <string> language-label: "";
+    in property <string> language-name: "";
+    in property <string> language-hint: "";
+
+    // ── 动态值（由 Rust 在会话过程中更新）
+    in property <string> state-text: "";
+    in property <string> peer-text: "";
+    in property <string> channels-text: "";
+    in property <string> capabilities-text: "";
+    in property <string> log-text: "";
+    in property <bool> connected: false;
+
+    // ── 输入（双向绑定到 Rust）
+    in-out property <string> message-input: "";
+
+    // ── 事件
+    callback connect-clicked();
+    callback send-clicked(string);
+
+    VerticalLayout {
+        // ═══ 顶栏
+        HorizontalLayout {
+            height: 68px;
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 14px;
+            padding-bottom: 14px;
+            spacing: 14px;
+            alignment: center;
+
+            Text {
+                text: root.app-title;
+                color: #f2f4f8;
+                font-size: 21px;
+                font-weight: 600;
+                vertical-alignment: center;
+                width: 130px;
+            }
+            Text {
+                text: root.tagline;
+                color: #7d828f;
+                font-size: 13px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            // 状态指示灯 + 状态文本
+            Rectangle {
+                width: 9px;
+                height: 9px;
+                border-radius: 5px;
+                background: root.connected ? #3ddc84 : #4a4e59;
+            }
+            Text {
+                text: root.state-text;
+                color: root.connected ? #3ddc84 : #9aa0ab;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle { height: 1px; background: #26282f; }
+
+        // ═══ 主体
+        HorizontalLayout {
+            vertical-stretch: 1;
+
+            // ── 左：设备列表
+            VerticalLayout {
+                width: 280px;
+                padding: 18px;
+                spacing: 12px;
+
+                Text {
+                    text: root.devices-title;
+                    color: #e6e9ef;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: #1b1c21;
+                    border-radius: 8px;
+
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+                        alignment: center;
+
+                        Text {
+                            text: root.devices-empty;
+                            color: #b6bac4;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                        }
+                        Text {
+                            text: root.devices-hint;
+                            color: #676c78;
+                            font-size: 12px;
+                            horizontal-alignment: center;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                // 语言（设置项，先放在这里，将来挪到设置页）
+                Rectangle {
+                    height: 1px;
+                    background: #26282f;
+                }
+                Text {
+                    text: root.language-label;
+                    color: #e6e9ef;
+                    font-size: 13px;
+                }
+                Text {
+                    text: root.language-name;
+                    color: #3ddc84;
+                    font-size: 13px;
+                }
+                Text {
+                    text: root.language-hint;
+                    color: #676c78;
+                    font-size: 11px;
+                    wrap: word-wrap;
+                }
+            }
+
+            Rectangle { width: 1px; background: #26282f; }
+
+            // ── 右：会话
+            VerticalLayout {
+                padding: 18px;
+                spacing: 14px;
+
+                Text {
+                    text: root.session-title;
+                    color: #e6e9ef;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+
+                // 会话信息卡
+                Rectangle {
+                    background: #1b1c21;
+                    border-radius: 8px;
+                    height: 132px;
+
+                    VerticalLayout {
+                        padding: 14px;
+                        spacing: 9px;
+
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text {
+                                text: root.peer-label;
+                                color: #7d828f;
+                                font-size: 12px;
+                                width: 96px;
+                            }
+                            Text {
+                                text: root.peer-text;
+                                color: #d8dbe3;
+                                font-size: 12px;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text {
+                                text: root.channels-label;
+                                color: #7d828f;
+                                font-size: 12px;
+                                width: 96px;
+                            }
+                            Text {
+                                text: root.channels-text;
+                                color: #d8dbe3;
+                                font-size: 12px;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text {
+                                text: root.capabilities-label;
+                                color: #7d828f;
+                                font-size: 12px;
+                                width: 96px;
+                            }
+                            Text {
+                                text: root.capabilities-text;
+                                color: #d8dbe3;
+                                font-size: 12px;
+                                horizontal-stretch: 1;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+
+                // 消息输入行
+                HorizontalLayout {
+                    spacing: 10px;
+                    height: 38px;
+
+                    LineEdit {
+                        placeholder-text: root.message-placeholder;
+                        text <=> root.message-input;
+                        horizontal-stretch: 1;
+                        enabled: root.connected;
+                        accepted => {
+                            root.send-clicked(root.message-input);
+                        }
+                    }
+                    Button {
+                        text: root.send-label;
+                        enabled: root.connected;
+                        clicked => {
+                            root.send-clicked(root.message-input);
+                        }
+                    }
+                }
+
+                // 连接 / 断开
+                HorizontalLayout {
+                    height: 40px;
+                    alignment: start;
+                    Button {
+                        text: root.connected ? root.disconnect-label : root.connect-label;
+                        clicked => {
+                            root.connect-clicked();
+                        }
+                    }
+                }
+
+                // 日志
+                Text {
+                    text: root.log-title;
+                    color: #e6e9ef;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
+                Rectangle {
+                    vertical-stretch: 1;
+                    background: #0f1014;
+                    border-radius: 8px;
+
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 12px;
+                            Text {
+                                text: root.log-text;
+                                color: #8f95a1;
+                                font-size: 12px;
+                                wrap: word-wrap;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

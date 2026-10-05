@@ -9,9 +9,11 @@
 ## 快速开始
 
 ```bash
-cargo test --workspace          # 41 个测试
-cargo run -p secrelay-cli -- selftest
+cargo test --workspace                    # 64 个测试
+cargo run -p secrelay-desktop             # 打开桌面客户端
+cargo run -p secrelay-desktop -- --demo   # 自动演示：自动连接并发两条消息
 
+cargo run -p secrelay-cli -- selftest     # 协议与会话模型自检
 # 屏幕采集探针（Windows 真实抓屏；其它平台加 --synthetic）
 cargo run --release -p secrelay-cli -- capture --seconds 5
 ```
@@ -25,6 +27,16 @@ cargo run -p secrelay-cli -- help
 ```
 
 > ⚠️ 性能相关的测量**必须用 release 构建**。同一采集探针 debug 11.6 fps / release 113.8 fps。
+
+## 界面
+
+![SecRelay 桌面客户端](docs/app-window.png)
+
+`--demo` 模式自动跑完整闭环：握手 → 协商出 `媒体 / 文件 / 控制` 三个频道 → 双向文字消息。
+注意日志第一行明确写着 *M0 演示：使用进程内回环连接，真实 P2P 尚未接入* —— 界面不会假装连通性已经跑通。
+
+**界面里没有面向用户的字面量。** `ui/app.slint` 的每一条文案都由 Rust 从 `secrelay-i18n` 注入，
+所以加一门语言只需要动 i18n crate。
 
 ## 核心设计：一条通道 + N 种频道
 
@@ -52,15 +64,20 @@ crates/
   secrelay-protocol/    线格式、频道模型、控制消息（纯逻辑，可编译到 WASM）
   secrelay-transport/   连接抽象：ICE 直连 / 中继 / QUIC 文件通道收敛到一个 trait
   secrelay-session/     会话编排：握手、能力协商、频道管理、事件流
-  secrelay-media/       采集抽象 + 平台后端（Windows DXGI 桌面复制、合成画面源）
+  secrelay-media/       媒体层：frame / capture / synthetic / backend 四类模块 + PNG 编码器
+  secrelay-i18n/        国际化：类型安全文案目录（当前仅简体中文）
 apps/
   secrelay-cli/         命令行工具、M0 自检与采集探针
+  secrelay-desktop/     桌面客户端（Slint UI + i18n）
 docs/
   需求分析.md            主文档：需求、平台矩阵、选型、风险、决策点
   measurements.md       M0 探针实测记录（可复现的性能数字）
   账号系统接入.md        SECTL 账号系统（OAuth + 云存储）的可选接入设计
   research/             四份专项调研（UI 框架 / 平台能力 / 传输媒体 / Web 端）
 ```
+
+**只有 `apps/secrelay-desktop` 允许依赖 Slint。** `crates/*` 里没有一处 UI 依赖 ——
+这条边界用 CI 检查（待办），它是"换 UI 框架只是换一层壳"这个承诺的唯一保障。
 
 `secrelay-transport` 里那个 trait 是**刻意设置的隔离层**：`webrtc-rs` 生态仍在动荡，文件通道的实现路径（复用 ICE + `quinn` vs `iroh`）也还没定，两者都必须被挡在这一层后面。
 
@@ -74,16 +91,20 @@ docs/
 - 回环传输（让协议与会话逻辑可以脱离真实网络被测试）
 - **Windows 屏幕采集**（DXGI Desktop Duplication，2560x1600 实测 113.8 fps / p50 8.69ms）
 - 合成画面源（无显示器环境下可测试，且变化区域可控）
-- 帧差分度量（脏矩形差分的依据：实测相邻帧仅 0.02% 像素变化）
+- 帧差分度量（脏矩形差分的依据：实测相邻帧 0.02%~0.54% 变化，峰值 31%）
+- 自写 PNG 编码器（零依赖截图，用于文档配图与缺陷复现）
+- **桌面客户端**（Slint UI：设备列表、会话状态、频道展示、文字消息、日志）
+- **类型安全 i18n**（45 条文案 × 简体中文；新增语言漏翻会编译失败）
 
 **未实现（下一步）**
 - 真实的 ICE 打洞 / 中继兜底 / 第二条 QUIC 文件通道（D24 未定）
 - H.264 编解码与**脏矩形差分实现**（探针已证明收益，尚未实现）
 - 鼠标指针合成（不合成指针的远程桌面不可用）
 - Linux / macOS / Android 的采集后端
+- 视频显示（UI 里的视频画面区域还没做）
 - 端到端加密（SFrame / Noise）、设备身份与二维码配对
 - 离线消息后端（双棘轮）
-- UI（框架由 M0 探针实测后决定，见 D6）
+- Web 客户端
 
 ## 相关仓库
 

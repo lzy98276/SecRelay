@@ -1,0 +1,29 @@
+[package]
+name = "secrelay-desktop"
+description = "SecRelay 桌面客户端（Slint UI）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "secrelay-desktop"
+path = "src/main.rs"
+
+[dependencies]
+secrelay-i18n.workspace = true
+secrelay-protocol.workspace = true
+secrelay-session.workspace = true
+secrelay-transport.workspace = true
+secrelay-media.workspace = true
+
+slint = "1.18"
+tokio = { workspace = true }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+[build-dependencies]
+slint-build = "1.18"

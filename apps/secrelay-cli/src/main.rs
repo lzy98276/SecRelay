@@ -27,6 +27,8 @@ capture 选项：
   --seconds <秒>       采集时长，默认 5
   --size <宽x高>       合成源的分辨率，默认 1920x1080
   --fps <帧率>         合成源的目标帧率，默认 60
+  --save <路径>        把最后一帧存成 PNG（自写编码器，无第三方依赖）
+  --scale <倍数>       存图时按整数倍降采样，默认 1
 
 说明：当前是 M0 骨架，传输层只有回环实现。selftest 验证协议、协商与会话模型，
       不代表真实的 P2P 连通性已经跑通。
@@ -313,6 +315,8 @@ fn capture(args: &[String]) -> Result<()> {
     let mut synthetic = false;
     let mut size = (1920u32, 1080u32);
     let mut fps = 60u32;
+    let mut save: Option<std::path::PathBuf> = None;
+    let mut scale = 1u32;
 
     let mut index = 0;
     while index < args.len() {
@@ -339,6 +343,25 @@ fn capture(args: &[String]) -> Result<()> {
                     .context("--fps 需要一个数值")?
                     .parse()
                     .context("--fps 必须是数字")?;
+                index += 2;
+            }
+            "--save" => {
+                save = Some(
+                    args.get(index + 1)
+                        .context("--save 需要一个路径")?
+                        .into(),
+                );
+                index += 2;
+            }
+            "--scale" => {
+                scale = args
+                    .get(index + 1)
+                    .context("--scale 需要一个整数")?
+                    .parse()
+                    .context("--scale 必须是整数")?;
+                if scale == 0 {
+                    bail!("--scale 必须大于 0");
+                }
                 index += 2;
             }
             other => bail!("capture 的未知参数：{other}"),
@@ -483,6 +506,24 @@ fn capture(args: &[String]) -> Result<()> {
         }
     }
 
+    if let Some(path) = &save {
+        let frame = previous
+            .as_ref()
+            .context("没有采到任何帧，无法存图")?;
+        let png = secrelay_media::png::encode(frame, scale)?;
+        std::fs::write(path, &png).with_context(|| format!("写入 {} 失败", path.display()))?;
+
+        println!();
+        println!("已保存截图：{}", path.display());
+        println!(
+            "   {}x{}（降采样 {}x）→ {:.2} MB",
+            frame.width.div_ceil(scale),
+            frame.height.div_ceil(scale),
+            scale,
+            png.len() as f64 / (1024.0 * 1024.0)
+        );
+    }
+
     println!("\n合计 {frames} 帧 / {:.2}s", elapsed.as_secs_f64());
     Ok(())
 }
@@ -498,7 +539,7 @@ fn build_source(
 
     #[cfg(target_os = "windows")]
     {
-        let source = secrelay_media::windows_dxgi::DxgiScreenSource::new(0)
+        let source = secrelay_media::DxgiScreenSource::new(0)
             .context("打开 DXGI 桌面复制失败；可加 --synthetic 先验证其余链路")?;
         Ok(Box::new(source))
     }

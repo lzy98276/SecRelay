@@ -44,7 +44,8 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
-use crate::{CaptureError, PixelFormat, ScreenSource, VideoFrame};
+use crate::capture::{CaptureError, ScreenSource};
+use crate::frame::{PixelFormat, VideoFrame};
 
 /// 单次 `AcquireNextFrame` 的等待上限（毫秒）。真实的等待总时长由调用方给的 timeout 决定。
 const MAX_ACQUIRE_WAIT_MS: u32 = 200;

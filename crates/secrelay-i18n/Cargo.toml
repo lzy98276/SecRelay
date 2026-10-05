@@ -1,0 +1,10 @@
+[package]
+name = "secrelay-i18n"
+description = "SecRelay 国际化：类型安全的文案目录（当前仅简体中文）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
