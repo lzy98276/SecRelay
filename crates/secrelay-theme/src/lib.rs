@@ -1,12 +1,20 @@
-//! SecRelay 主题色：跟随系统强调色。
+//! SecRelay 主题：跟随系统强调色 + 浅色/深色配色。
 //!
 //! # 为什么单独一个 crate
 //!
-//! 它**不依赖任何 UI 框架**（只读系统配置），所以可以放在 `crates/` 下被桌面端、
+//! 它**不依赖任何 UI 框架**（只读系统配置、只算颜色），所以可以放在 `crates/` 下被桌面端、
 //! 命令行端、将来的 Web 端共用；同时解析逻辑是纯函数，可以在**每个平台**上跑测试 ——
-//! 即使本机是 Windows，也能验证 macOS / Linux 的解析分支。
+//! 即使本机是 Windows，也能验证 macOS / Linux 的分支。
 //!
-//! # 取值顺序
+//! # 两件事
+//!
+//! | 模块 | 职责 |
+//! |---|---|
+//! | [`palette`] | 主题模式（跟随系统 / 浅色 / 深色）与整套调色板 |
+//! | [`prefs`] | 把用户选择持久化到配置目录 |
+//! | [`platform`] | 读系统强调色与系统深浅色偏好 |
+//!
+//! # 取值顺序（强调色）
 //!
 //! | 平台 | 来源（按顺序尝试） |
 //! |---|---|
@@ -14,14 +22,13 @@
 //! | macOS | `defaults read -g AppleAccentColor`（索引） |
 //! | Linux | GNOME `gsettings … accent-color` → KDE `kdeglobals` → GTK `gtk.css` 的 `theme_selected_bg_color` |
 //! | 全部失败 | [`FALLBACK_ACCENT`] |
-//!
-//! # 一处刻意的调整
-//!
-//! 系统强调色有可能非常暗（例如接近黑色的自定义强调色）。直接拿来当深色界面上的
-//! 强调文字/指示条会**看不见**。所以这里只在**亮度不足**时把它提亮到可读阈值，
-//! 其余情况原样使用 —— 见 [`Rgb::readable_on_dark`]。
 
-mod platform;
+pub mod palette;
+pub mod platform;
+pub mod prefs;
+
+pub use palette::{ColorScheme, Palette, ThemeMode};
+pub use prefs::Preferences;
 
 /// 取不到系统强调色时的回退色：**Windows 出厂默认强调色**（Fluent 蓝）。
 ///
@@ -29,13 +36,18 @@ mod platform;
 /// 而不是"这个应用有它自己的想法"。品牌色只在明确的品牌位（图标、关于页）出现。
 pub const FALLBACK_ACCENT: Rgb = Rgb::new(0x00, 0x78, 0xD4);
 
-/// 深色界面上强调色所需的最低相对亮度。
+/// 深色界面的基底色。调色板与"强调色是否够醒目"的判定都以它为参照。
 ///
-/// 这个值刻意定得**很低**：目的只是拦住"几乎看不见"的颜色（例如接近黑的自定义强调色），
-/// 而不是去评判系统色好不好看。定高了会误伤标准系统色 ——
-/// 实测 Apple 蓝 `#0A84FF` 的亮度约 0.235、GNOME 蓝 `#3584E4` 约 0.226，
-/// 阈值一旦到 0.25 就会把这两个官方颜色也一起改掉，那就不是"跟随系统"了。
-pub const MIN_ACCENT_LUMINANCE: f32 = 0.12;
+/// **必须与 `ui/app.slint` 里深色主题的 `bg` 一致** —— 不一致会让柔和底色显脏。
+pub const DARK_BASE: Rgb = Rgb::new(0x15, 0x16, 0x1A);
+
+/// 前景色与背景色之间所需的最小相对亮度差。
+///
+/// 这个值刻意定得**很低**：目的只是拦住"几乎看不见"的颜色，而不是评判系统色好不好看。
+/// 定高了会误伤标准系统色 —— 实测 Apple 蓝 `#0A84FF` 相对深浅背景的差值约 0.23、
+/// GNOME 蓝 `#3584E4` 约 0.22，阈值一旦到 0.25 就会把这两个官方颜色也一起改掉，
+/// 那就不是"跟随系统"了。
+pub const MIN_CONTRAST_GAP: f32 = 0.12;
 
 /// sRGB 颜色。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,27 +80,56 @@ impl Rgb {
         0.2126 * linear(self.r) + 0.7152 * linear(self.g) + 0.0722 * linear(self.b)
     }
 
-    /// 在深色背景上是否足够醒目。
-    pub fn is_readable_on_dark(self) -> bool {
-        self.relative_luminance() >= MIN_ACCENT_LUMINANCE
-    }
-
-    /// 如果太暗就整体提亮到可读阈值；否则原样返回。
+    /// 让这个颜色在给定背景上足够醒目。
     ///
-    /// 提亮是按比例拉向白色，保持色相不变。
-    pub fn readable_on_dark(self) -> Rgb {
-        if self.is_readable_on_dark() {
+    /// - 背景偏暗 → 把前景往白色方向提亮；
+    /// - 背景偏亮 → 把前景往黑色方向压暗。
+    ///
+    /// 已经够醒目时**原样返回**（色相不变）。这是"跟随系统"不会被破坏的关键：
+    /// 官方系统色都在阈值之内，不会被改动。
+    pub fn readable_on(self, background: Rgb) -> Rgb {
+        let background_luminance = background.relative_luminance();
+        let target = if background_luminance < 0.5 {
+            background_luminance + MIN_CONTRAST_GAP
+        } else {
+            background_luminance - MIN_CONTRAST_GAP
+        };
+        let towards = if background_luminance < 0.5 {
+            Rgb::new(255, 255, 255)
+        } else {
+            Rgb::new(0, 0, 0)
+        };
+
+        let far_enough = |color: Rgb| {
+            let luminance = color.relative_luminance();
+            if background_luminance < 0.5 {
+                luminance >= target
+            } else {
+                luminance <= target
+            }
+        };
+
+        if far_enough(self) {
             return self;
         }
-        // 逐步拉向白色，直到够亮。上限 20 步，避免极端输入下死循环。
+        // 逐步拉向黑/白，直到够远。上限 20 步，避免极端输入下死循环。
         for step in 1..=20 {
-            let t = step as f32 / 20.0;
-            let lightened = self.mix(Rgb::new(255, 255, 255), t);
-            if lightened.is_readable_on_dark() {
-                return lightened;
+            let candidate = self.mix(towards, step as f32 / 20.0);
+            if far_enough(candidate) {
+                return candidate;
             }
         }
-        Rgb::new(255, 255, 255)
+        towards
+    }
+
+    /// 相对深色基底是否够醒目。等价于 `readable_on(DARK_BASE)` 的判定部分。
+    pub fn is_readable_on_dark(self) -> bool {
+        self.readable_on(DARK_BASE) == self
+    }
+
+    /// 在深色基底上保证醒目（保留旧名字，便于阅读）。
+    pub fn readable_on_dark(self) -> Rgb {
+        self.readable_on(DARK_BASE)
     }
 
     /// 按 `t`（0.0 = self，1.0 = other）线性混合。
@@ -99,7 +140,11 @@ impl Rgb {
             let b = f32::from(b);
             (a + (b - a) * t).round().clamp(0.0, 255.0) as u8
         };
-        Rgb::new(blend(self.r, other.r), blend(self.g, other.g), blend(self.b, other.b))
+        Rgb::new(
+            blend(self.r, other.r),
+            blend(self.g, other.g),
+            blend(self.b, other.b),
+        )
     }
 }
 
@@ -118,34 +163,27 @@ pub enum AccentSource {
     Fallback,
 }
 
-/// 最终采用的强调色。
+/// 探测到的强调色（**原始值**，未做可读性调整）。
+///
+/// 可读性调整交给 [`Palette::build`] —— 因为它取决于当前是浅色还是深色，
+/// 而这一步只知道"系统给的是什么颜色"。
 #[derive(Debug, Clone, Copy)]
 pub struct Accent {
     pub color: Rgb,
     pub source: AccentSource,
-    /// 与之配套的"柔和底色"（用于消息气泡等大面积色块）。
-    pub soft: Rgb,
 }
 
 /// 读取系统强调色；**永不失败** —— 取不到就用 [`FALLBACK_ACCENT`]。
-///
-/// `soft` 是与强调色配套的低饱和底色，按深色界面基底混合得到。
-pub fn system_accent(dark_base: Rgb) -> Accent {
-    let accent = match platform::detect() {
+pub fn detect_accent() -> Accent {
+    match platform::detect_accent() {
         Some((color, name)) => Accent {
-            color: color.readable_on_dark(),
+            color,
             source: AccentSource::System(name),
-            soft: Rgb::new(0, 0, 0), // 下面统一计算
         },
         None => Accent {
-            color: FALLBACK_ACCENT.readable_on_dark(),
+            color: FALLBACK_ACCENT,
             source: AccentSource::Fallback,
-            soft: Rgb::new(0, 0, 0),
         },
-    };
-    Accent {
-        soft: accent.color.mix(dark_base, 0.78),
-        ..accent
     }
 }
 
@@ -158,23 +196,41 @@ pub fn system_accent(dark_base: Rgb) -> Accent {
 ///
 /// Windows 的强调色 DWORD 字节序是 **ABGR**：低字节是 R。
 pub fn parse_windows_accent_output(output: &str) -> Option<Rgb> {
-    let value = output
-        .lines()
-        .find_map(|line| {
-            let trimmed = line.trim();
-            let hex = trimmed.strip_prefix("0x").or_else(|| {
-                // 有的输出形如 "AccentColor    REG_DWORD    0x00ff8040"
-                trimmed.split_whitespace().find(|t| t.starts_with("0x"))
-                    .map(|t| &t[2..])
-            })?;
-            u32::from_str_radix(hex, 16).ok()
+    let value = output.lines().find_map(|line| {
+        let trimmed = line.trim();
+        let hex = trimmed.strip_prefix("0x").or_else(|| {
+            // 有的输出形如 "AccentColor    REG_DWORD    0x00ff8040"
+            trimmed
+                .split_whitespace()
+                .find(|token| token.starts_with("0x"))
+                .map(|token| &token[2..])
         })?;
+        u32::from_str_radix(hex, 16).ok()
+    })?;
 
     Some(Rgb::new(
         (value & 0xFF) as u8,
         ((value >> 8) & 0xFF) as u8,
         ((value >> 16) & 0xFF) as u8,
     ))
+}
+
+/// 解析 Windows 深浅色偏好：`AppsUseLightTheme`。
+///
+/// 注册表里是 DWORD：`1` = 浅色，`0` = 深色。输出形如 `... REG_DWORD 0x1`。
+pub fn parse_windows_light_theme(output: &str) -> Option<ColorScheme> {
+    let value = output.lines().find_map(|line| {
+        let trimmed = line.trim();
+        trimmed
+            .split_whitespace()
+            .find(|token| token.starts_with("0x"))
+            .and_then(|token| u32::from_str_radix(&token[2..], 16).ok())
+    })?;
+    Some(if value == 0 {
+        ColorScheme::Dark
+    } else {
+        ColorScheme::Light
+    })
 }
 
 /// macOS `AppleAccentColor` 的索引 → 颜色。
@@ -195,12 +251,25 @@ pub fn accent_from_macos_index(index: i32) -> Rgb {
     }
 }
 
+/// macOS 深浅色：`AppleInterfaceStyle` 为 `Dark` 时是深色，**键不存在表示浅色**。
+pub fn parse_macos_dark_mode(output: &str) -> ColorScheme {
+    if output.trim().eq_ignore_ascii_case("dark") {
+        ColorScheme::Dark
+    } else {
+        ColorScheme::Light
+    }
+}
+
 /// 主题色名称 → 颜色。
 ///
 /// 覆盖 GNOME 的 `accent-color` 取值（blue / teal / green / yellow / orange /
 /// red / pink / purple / slate）。未知名称返回 `None`，让调用方继续尝试下一个来源。
 pub fn accent_from_name(name: &str) -> Option<Rgb> {
-    let normalized = name.trim().trim_matches('\'').trim_matches('"').to_ascii_lowercase();
+    let normalized = name
+        .trim()
+        .trim_matches('\'')
+        .trim_matches('"')
+        .to_ascii_lowercase();
     let color = match normalized.as_str() {
         "blue" => Rgb::new(0x35, 0x84, 0xE4),
         "teal" => Rgb::new(0x21, 0x90, 0xA4),
@@ -214,6 +283,20 @@ pub fn accent_from_name(name: &str) -> Option<Rgb> {
         _ => return None,
     };
     Some(color)
+}
+
+/// 解析 GNOME 的 `color-scheme` 取值：`prefer-dark` 是深色，其余（含 `default`）是浅色。
+pub fn parse_gnome_color_scheme(output: &str) -> ColorScheme {
+    let normalized = output
+        .trim()
+        .trim_matches('\'')
+        .trim_matches('"')
+        .to_ascii_lowercase();
+    if normalized.contains("dark") {
+        ColorScheme::Dark
+    } else {
+        ColorScheme::Light
+    }
 }
 
 /// 从 GTK 样式表文本里找 `theme_selected_bg_color`。
@@ -288,6 +371,15 @@ mod tests {
         assert!(parse_windows_accent_output("没有十六进制值").is_none());
     }
 
+    #[test]
+    fn 解析_windows_深浅色() {
+        let light = "HKEY_CURRENT_USER\\...\\Personalize\r\n    AppsUseLightTheme    REG_DWORD    0x1\r\n";
+        let dark = "HKEY_CURRENT_USER\\...\\Personalize\r\n    AppsUseLightTheme    REG_DWORD    0x0\r\n";
+        assert_eq!(parse_windows_light_theme(light), Some(ColorScheme::Light));
+        assert_eq!(parse_windows_light_theme(dark), Some(ColorScheme::Dark));
+        assert_eq!(parse_windows_light_theme("没有值"), None);
+    }
+
     // ── macOS
 
     #[test]
@@ -300,13 +392,33 @@ mod tests {
         assert_eq!(accent_from_macos_index(99), accent_from_macos_index(4));
     }
 
-    // ── 名称映射
+    #[test]
+    fn 解析_macos_深浅色() {
+        // 键不存在时命令返回非零，调用方按"浅色"处理；这里只测文本解析
+        assert_eq!(parse_macos_dark_mode("Dark\n"), ColorScheme::Dark);
+        assert_eq!(parse_macos_dark_mode("dark"), ColorScheme::Dark);
+        assert_eq!(parse_macos_dark_mode(""), ColorScheme::Light);
+        assert_eq!(parse_macos_dark_mode("Light"), ColorScheme::Light);
+    }
+
+    // ── Linux
+
+    #[test]
+    fn 解析_gnome_配色偏好() {
+        assert_eq!(parse_gnome_color_scheme("'prefer-dark'\n"), ColorScheme::Dark);
+        assert_eq!(parse_gnome_color_scheme("'default'\n"), ColorScheme::Light);
+        assert_eq!(parse_gnome_color_scheme("prefer-light"), ColorScheme::Light);
+        assert_eq!(parse_gnome_color_scheme("\"prefer-dark\""), ColorScheme::Dark);
+    }
 
     #[test]
     fn 名称映射带引号也能解析() {
         assert_eq!(accent_from_name("'blue'"), accent_from_name("blue"));
         assert_eq!(accent_from_name("\"Blue\""), accent_from_name("blue"));
-        assert_eq!(accent_from_name("  teal  "), Some(Rgb::new(0x21, 0x90, 0xA4)));
+        assert_eq!(
+            accent_from_name("  teal  "),
+            Some(Rgb::new(0x21, 0x90, 0xA4))
+        );
         assert!(accent_from_name("未知颜色").is_none());
     }
 
@@ -315,7 +427,10 @@ mod tests {
     #[test]
     fn 解析_kde_写法() {
         assert_eq!(parse_kde_accent("61,174,233"), Some(Rgb::new(61, 174, 233)));
-        assert_eq!(parse_kde_accent("\"61,174,233\""), Some(Rgb::new(61, 174, 233)));
+        assert_eq!(
+            parse_kde_accent("\"61,174,233\""),
+            Some(Rgb::new(61, 174, 233))
+        );
         assert!(parse_kde_accent("1,2").is_none());
         assert!(parse_kde_accent("a,b,c").is_none());
     }
@@ -326,6 +441,13 @@ mod tests {
         assert_eq!(parse_hex("0078d4"), Some(FALLBACK_ACCENT));
         assert_eq!(parse_hex("#FFF"), None);
         assert_eq!(parse_hex("xyzxyz"), None);
+    }
+
+    #[test]
+    fn 解析十六进制容忍样式表写法() {
+        assert_eq!(parse_hex("#3584E4;"), Some(Rgb::new(0x35, 0x84, 0xE4)));
+        assert_eq!(parse_hex("'#3584E4'"), Some(Rgb::new(0x35, 0x84, 0xE4)));
+        assert_eq!(parse_hex("#3584E4,"), Some(Rgb::new(0x35, 0x84, 0xE4)));
     }
 
     #[test]
@@ -346,46 +468,37 @@ mod tests {
     }
 
     #[test]
-    fn 默认色在深色背景上可读() {
-        assert!(
-            FALLBACK_ACCENT.is_readable_on_dark(),
-            "回退色的亮度是 {}",
-            FALLBACK_ACCENT.relative_luminance()
-        );
-    }
-
-    #[test]
-    fn 很暗的强调色会被提亮() {
-        let almost_black = Rgb::new(0x10, 0x10, 0x10);
-        assert!(!almost_black.is_readable_on_dark());
-        let fixed = almost_black.readable_on_dark();
-        assert!(fixed.is_readable_on_dark(), "提亮后仍不可读：{fixed}");
-        assert!(fixed.relative_luminance() > almost_black.relative_luminance());
-    }
-
-    #[test]
-    fn 已经够亮的颜色不被改动() {
+    fn 已经够醒目的颜色不被改动() {
         // 这几个都是**官方系统色**，必须原样使用 —— 阈值定高了会把它们改掉。
         for color in [
             FALLBACK_ACCENT,
-            Rgb::new(0x0A, 0x84, 0xFF), // Apple 蓝，亮度约 0.235
-            Rgb::new(0x35, 0x84, 0xE4), // GNOME 蓝，亮度约 0.226
-            Rgb::new(0xFF, 0xFF, 0xFF),
+            Rgb::new(0x0A, 0x84, 0xFF), // Apple 蓝
+            Rgb::new(0x35, 0x84, 0xE4), // GNOME 蓝
         ] {
             assert_eq!(
                 color.readable_on_dark(),
                 color,
-                "{color}（亮度 {:.3}）不该被改动",
+                "{color}（亮度 {:.3}）在深色基底上不该被改动",
                 color.relative_luminance()
+            );
+            assert_eq!(
+                color.readable_on(Rgb::new(0xFF, 0xFF, 0xFF)),
+                color,
+                "{color} 在白色背景上不该被改动"
             );
         }
     }
 
     #[test]
-    fn 解析十六进制容忍样式表写法() {
-        assert_eq!(parse_hex("#3584E4;"), Some(Rgb::new(0x35, 0x84, 0xE4)));
-        assert_eq!(parse_hex("'#3584E4'"), Some(Rgb::new(0x35, 0x84, 0xE4)));
-        assert_eq!(parse_hex("#3584E4,"), Some(Rgb::new(0x35, 0x84, 0xE4)));
+    fn 很暗的强调色会被提亮_很亮的会被压暗() {
+        let dark = Rgb::new(0x10, 0x10, 0x10);
+        assert_ne!(dark.readable_on_dark(), dark);
+        assert!(dark.readable_on_dark().is_readable_on_dark());
+
+        let bright = Rgb::new(0xFF, 0xFF, 0x00);
+        let fixed = bright.readable_on(Rgb::new(0xFF, 0xFF, 0xFF));
+        assert_ne!(fixed, bright);
+        assert!(fixed.relative_luminance() < bright.relative_luminance());
     }
 
     #[test]
@@ -414,17 +527,13 @@ mod tests {
         assert_eq!(Rgb::new(0, 0, 0).to_hex_string(), "#000000");
     }
 
-    // ── 端到端
-
     #[test]
-    fn 总能拿到一个可读的强调色() {
-        // 无论本机是什么系统、有没有主题色，都必须返回可读的颜色。
-        let accent = system_accent(Rgb::new(0x15, 0x16, 0x1A));
-        assert!(accent.color.is_readable_on_dark(), "{:?}", accent);
-        // soft 应当比原色更接近背景（更暗）
+    fn 探测不_panic_且结果总是可用的() {
+        // 无论本机是什么系统、有没有主题色，都必须返回一个能用的颜色。
+        let accent = detect_accent();
         assert!(
-            accent.soft.relative_luminance() < accent.color.relative_luminance(),
-            "soft 应当更暗：{accent:?}"
+            accent.color.readable_on(DARK_BASE).relative_luminance()
+                >= DARK_BASE.relative_luminance() + MIN_CONTRAST_GAP - 0.001
         );
     }
 }

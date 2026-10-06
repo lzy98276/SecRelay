@@ -53,6 +53,9 @@ const ICONS: &[(&str, &str)] = &[
     ("warning", "ic_fluent_warning_20_filled"),
     ("checkmark", "ic_fluent_checkmark_circle_20_filled"),
     ("dismiss", "ic_fluent_dismiss_circle_20_filled"),
+    // 账号
+    ("account", "ic_fluent_person_20_filled"),
+    ("sign_in", "ic_fluent_arrow_enter_20_filled"),
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

@@ -1,13 +1,13 @@
-//! 平台相关：**怎么把系统强调色取出来**。
+//! 平台相关：**怎么把系统设置取出来**。
 //!
 //! 解析逻辑全在父模块（纯函数、各平台都测得到）；这里只负责取到那段原始文本。
 //! 每个取法都可能失败（键不存在、命令不存在、桌面环境不同），失败就返回 `None`
 //! 让调用方继续试下一个来源。
 
-use crate::Rgb;
+use crate::{ColorScheme, Rgb};
 
-/// 按平台顺序探测。返回 `(颜色, 来源名称)`；全部失败返回 `None`。
-pub fn detect() -> Option<(Rgb, &'static str)> {
+/// 探测系统强调色。返回 `(颜色, 来源名称)`；全部失败返回 `None`。
+pub fn detect_accent() -> Option<(Rgb, &'static str)> {
     #[cfg(target_os = "windows")]
     return windows_accent();
 
@@ -16,6 +16,51 @@ pub fn detect() -> Option<(Rgb, &'static str)> {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     return linux_accent();
+
+    #[allow(unreachable_code)]
+    None
+}
+
+/// 探测系统深浅色偏好。
+///
+/// 探测失败时**默认深色** —— 本应用的调色板最初就是按深色设计的，
+/// 检测不到时宁可给一个设计过的样子，也不要一个没被验证过的浅色。
+pub fn detect_color_scheme() -> ColorScheme {
+    probe_color_scheme().unwrap_or(ColorScheme::Dark)
+}
+
+fn probe_color_scheme() -> Option<ColorScheme> {
+    #[cfg(target_os = "windows")]
+    {
+        let text = reg_query(
+            r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            "AppsUseLightTheme",
+        )?;
+        return crate::parse_windows_light_theme(&text);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        // 键不存在时 `defaults` 返回非零，此时是浅色（Apple 的约定）
+        let output = std::process::Command::new("defaults")
+            .args(["read", "-g", "AppleInterfaceStyle"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return Some(ColorScheme::Light);
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        return Some(crate::parse_macos_dark_mode(&text));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let text = run(
+            "gsettings",
+            &["get", "org.gnome.desktop.interface", "color-scheme"],
+        )?;
+        return Some(crate::parse_gnome_color_scheme(&text));
+    }
 
     #[allow(unreachable_code)]
     None
@@ -118,7 +163,14 @@ fn linux_accent() -> Option<(Rgb, &'static str)> {
     for tool in ["kreadconfig6", "kreadconfig5"] {
         if let Some(text) = run(
             tool,
-            &["--file", "kdeglobals", "--group", "General", "--key", "AccentColor"],
+            &[
+                "--file",
+                "kdeglobals",
+                "--group",
+                "General",
+                "--key",
+                "AccentColor",
+            ],
         ) {
             if let Some(color) = crate::parse_kde_accent(&text) {
                 return Some((color, "KDE 强调色"));
@@ -143,7 +195,10 @@ fn linux_accent() -> Option<(Rgb, &'static str)> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn run(program: &str, args: &[&str]) -> Option<String> {
-    let output = std::process::Command::new(program).args(args).output().ok()?;
+    let output = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .ok()?;
     if !output.status.success() {
         return None;
     }
@@ -152,9 +207,10 @@ fn run(program: &str, args: &[&str]) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    /// 探测函数在**任何**平台上都必须能正常返回（要么有颜色，要么 None），不能 panic。
+    /// 探测函数在**任何**平台上都必须能正常返回，不能 panic。
     #[test]
     fn 探测不_panic() {
-        let _ = super::detect();
+        let _ = super::detect_accent();
+        let _ = super::detect_color_scheme();
     }
 }

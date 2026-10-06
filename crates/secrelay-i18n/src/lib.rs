@@ -134,9 +134,22 @@ pub enum Key {
     SettingsTitle,
     SettingsLanguage,
     SettingsLanguageHint,
+    SettingsTheme,
+    SettingsThemeHint,
     SettingsDiagnostics,
     SettingsLogDirHint,
     ActionOpenLogDir,
+
+    // ── 主题模式
+    ThemeFollowSystem,
+    ThemeLight,
+    ThemeDark,
+
+    // ── 账号
+    AccountTitle,
+    AccountNotLoggedIn,
+    ActionLogin,
+    ActionClose,
 
     // ── 尚未实现的页面
     NotAvailableTitle,
@@ -216,9 +229,18 @@ impl Key {
         Key::SettingsTitle,
         Key::SettingsLanguage,
         Key::SettingsLanguageHint,
+        Key::SettingsTheme,
+        Key::SettingsThemeHint,
         Key::SettingsDiagnostics,
         Key::SettingsLogDirHint,
         Key::ActionOpenLogDir,
+        Key::ThemeFollowSystem,
+        Key::ThemeLight,
+        Key::ThemeDark,
+        Key::AccountTitle,
+        Key::AccountNotLoggedIn,
+        Key::ActionLogin,
+        Key::ActionClose,
         Key::NotAvailableTitle,
         Key::NotAvailableHint,
         Key::MessagesEmpty,
@@ -305,9 +327,20 @@ impl Key {
             Key::SettingsTitle => "设置",
             Key::SettingsLanguage => "界面语言",
             Key::SettingsLanguageHint => "目前仅提供简体中文，其它语言后续添加",
+            Key::SettingsTheme => "主题",
+            Key::SettingsThemeHint => "跟随系统会随系统的深浅色偏好自动切换",
             Key::SettingsDiagnostics => "诊断",
             Key::SettingsLogDirHint => "日志写在文件里，不占用界面；需要排查问题时再打开",
             Key::ActionOpenLogDir => "打开日志目录",
+
+            Key::AccountTitle => "账号",
+            Key::AccountNotLoggedIn => "未登录",
+            Key::ActionLogin => "登录",
+            Key::ActionClose => "关闭",
+
+            Key::ThemeFollowSystem => "跟随系统",
+            Key::ThemeLight => "浅色",
+            Key::ThemeDark => "深色",
 
             Key::NotAvailableTitle => "该功能尚未实现",
             Key::NotAvailableHint => "页面位置已经留好，等功能接上即可",
@@ -384,7 +417,7 @@ mod tests {
         // 防止新增 Key 变体后忘记加进 ALL —— 那样上面的穷尽检查会漏掉它。
         // Rust 无法在不引宏的情况下枚举枚举变体，所以这里用一个数字做绊线：
         // 变体数一变，这个测试就失败，提醒维护者同步 ALL。
-        const EXPECTED: usize = 68;
+        const EXPECTED: usize = 77;
         assert_eq!(
             Key::ALL.len(),
             EXPECTED,

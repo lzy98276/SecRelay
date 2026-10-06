@@ -24,10 +24,11 @@ use secrelay_i18n::{Key, Lang};
 use secrelay_media::{scale_for_width, to_rgba_scaled, CaptureError, RgbaImage};
 use secrelay_protocol::{Channel, ControlMessage, DeviceId};
 use secrelay_session::{Session, SessionConfig, SessionEvent};
+use secrelay_theme::{Palette, Rgb};
 use secrelay_transport::loopback_pair;
 use slint::{ComponentHandle, ModelRc, VecModel, Weak};
 
-use crate::{AppWindow, ChatMessage, Strings};
+use crate::{AppWindow, ChatMessage, SettingsWindow, Strings, Theme};
 
 /// 从 UI 线程投递待发文字给会话线程。
 ///
@@ -62,11 +63,11 @@ const OUTBOX_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 // ────────────────────────────────────────────────────── 语言与文案
 
-/// 把所有文案注入 UI 的 `Strings` 全局。
+/// 把文案注入某一棵树里的 `Strings` 全局。
 ///
-/// **加一门语言只需要改这里传入的 `lang`** —— `ui/app.slint` 里没有任何面向用户的字面量。
-pub fn apply_language(ui: &AppWindow, lang: Lang) {
-    let strings = ui.global::<Strings>();
+/// Slint 的 global 是**按组件树各自实例化**的，所以主窗口与设置窗口要各注一次。
+/// 逻辑集中在这里，避免两处漂移。
+pub fn apply_strings(strings: Strings, lang: Lang) {
     let key = |k: Key| -> slint::SharedString { k.text(lang).into() };
 
     strings.set_app_title(key(Key::AppName));
@@ -99,6 +100,7 @@ pub fn apply_language(ui: &AppWindow, lang: Lang) {
     strings.set_action_preview_start(key(Key::ActionPreviewStart));
     strings.set_action_preview_stop(key(Key::ActionPreviewStop));
     strings.set_action_open_log_dir(key(Key::ActionOpenLogDir));
+    strings.set_action_close(key(Key::ActionClose));
 
     strings.set_message_placeholder(key(Key::MessagePlaceholder));
     strings.set_messages_empty(key(Key::MessagesEmpty));
@@ -111,23 +113,73 @@ pub fn apply_language(ui: &AppWindow, lang: Lang) {
     strings.set_settings_title(key(Key::SettingsTitle));
     strings.set_settings_language(key(Key::SettingsLanguage));
     strings.set_settings_language_hint(key(Key::SettingsLanguageHint));
+    strings.set_settings_theme(key(Key::SettingsTheme));
+    strings.set_settings_theme_hint(key(Key::SettingsThemeHint));
     strings.set_settings_diagnostics(key(Key::SettingsDiagnostics));
     strings.set_settings_log_dir_hint(key(Key::SettingsLogDirHint));
 
+    strings.set_theme_follow_system(key(Key::ThemeFollowSystem));
+    strings.set_theme_light(key(Key::ThemeLight));
+    strings.set_theme_dark(key(Key::ThemeDark));
+
+    strings.set_account_title(key(Key::AccountTitle));
+    strings.set_account_not_logged_in(key(Key::AccountNotLoggedIn));
+    strings.set_action_login(key(Key::ActionLogin));
+
     strings.set_not_available_title(key(Key::NotAvailableTitle));
     strings.set_not_available_hint(key(Key::NotAvailableHint));
+}
+
+/// 把文案注入主窗口。
+///
+/// **加一门语言只需要改这里传入的 `lang`** —— `ui/app.slint` 里没有任何面向用户的字面量。
+pub fn apply_language(ui: &AppWindow, lang: Lang) {
+    apply_strings(ui.global::<Strings>(), lang);
 
     // 语言自称永远用它自己的语言显示，不参与翻译。
     ui.set_language_name(lang.native_name().into());
     ui.set_log_dir(log_dir().display().to_string().into());
 
+    // 账号入口：登录功能尚未接入，先如实显示"未登录"。
+    ui.set_account_text(Key::AccountNotLoggedIn.text(lang).into());
+    ui.set_account_subtitle(Key::ActionLogin.text(lang).into());
+
     // 未连接时的初始动态值
     if !is_connected() {
-        ui.set_state_text(key(Key::SessionStateIdle));
-        ui.set_peer_text(key(Key::SessionNone));
-        ui.set_channels_text(key(Key::SessionNone));
-        ui.set_capabilities_text(key(Key::SessionNone));
+        ui.set_state_text(Key::SessionStateIdle.text(lang).into());
+        ui.set_peer_text(Key::SessionNone.text(lang).into());
+        ui.set_channels_text(Key::SessionNone.text(lang).into());
+        ui.set_capabilities_text(Key::SessionNone.text(lang).into());
     }
+}
+
+/// 把文案注入设置窗口（独立窗口，有自己的一份 global 实例）。
+pub fn apply_language_to_settings(settings: &SettingsWindow, lang: Lang) {
+    apply_strings(settings.global::<Strings>(), lang);
+    settings.set_language_name(lang.native_name().into());
+    settings.set_log_dir(log_dir().display().to_string().into());
+}
+
+/// 把调色板注入某一棵树里的 `Theme` 全局。
+///
+/// 颜色不写在 `.slint` 里，是因为"跟随系统"要在运行时切换，而且强调色要按
+/// 浅色/深色分别做可读性调整 —— 那部分逻辑在 `secrelay-theme` 里且有测试。
+pub fn apply_palette(theme: Theme, palette: &Palette) {
+    let color = |c: Rgb| slint::Color::from_rgb_u8(c.r, c.g, c.b);
+
+    theme.set_bg(color(palette.bg));
+    theme.set_nav(color(palette.nav));
+    theme.set_surface(color(palette.surface));
+    theme.set_surface_hi(color(palette.surface_hi));
+    theme.set_stage(color(palette.stage));
+    theme.set_border(color(palette.border));
+    theme.set_text(color(palette.text));
+    theme.set_text_dim(color(palette.text_dim));
+    theme.set_text_faint(color(palette.text_faint));
+    theme.set_idle(color(palette.idle));
+    theme.set_accent(color(palette.accent));
+    theme.set_accent_soft(color(palette.accent_soft));
+    theme.set_on_accent(color(palette.on_accent));
 }
 
 // ────────────────────────────────────────────────────── 日志目录

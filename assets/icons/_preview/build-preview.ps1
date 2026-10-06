@@ -1,4 +1,4 @@
-# 生成「仿 SecRandom」这一轮的预览页：参考图 + 三个强调色变体，内联渲染后由无头 Edge 截图。
+﻿# 生成「仿 SecRandom」这一轮的预览页：参考图 + 三个强调色变体，内联渲染后由无头 Edge 截图。
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
@@ -10,8 +10,9 @@ $refBytes = [System.IO.File]::ReadAllBytes((Join-Path $outDir 'ref-secrandom.png
 $refUri = 'data:image/png;base64,' + [System.Convert]::ToBase64String($refBytes)
 
 $variants = @(
-  @{ File = 'concept-k4-arrow-amber.svg'; Title = 'K4 · 右上箭头 / 琥珀'; Note = '箭头方向和参考图对勾的长臂一致，节奏最接近' },
-  @{ File = 'concept-k5-arrow-cyan.svg';  Title = 'K5 · 右上箭头 / 青蓝'; Note = '同一图形换回蓝色家族，看是否还够跳' }
+  @{ File = 'concept-p4-plane.svg'; Title = 'P4 · 琥珀强调'; Note = '强调色 #F2A33C。蓝主色 + 一个非蓝点睛，和 SecRandom 的结构完全一致' },
+  @{ File = 'concept-p5-jade.svg';  Title = 'P5 · 墨绿强调'; Note = '强调色 #36AA75，就是 SecRandom 本人那个色。家族一致度最高' },
+  @{ File = 'concept-p6-cyan.svg';  Title = 'P6 · 青蓝强调'; Note = '强调色 #22D3EE。完全守蓝色家族，代价是点睛不跳' }
 )
 
 $rows = ''
@@ -79,15 +80,17 @@ $rows
 </body></html>
 "@
 
-$htmlPath = Join-Path $outDir 'concepts-k45.html'
+$htmlPath = Join-Path $outDir 'concepts-p456.html'
 Set-Content -Path $htmlPath -Value $html -Encoding UTF8
 
 $edge = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-$png = Join-Path $outDir 'concepts-k45.png'
+$png = Join-Path $outDir 'concepts-p456.png'
 & $edge --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 `
-        --window-size=1180,600 --screenshot=$png "file:///$($htmlPath -replace '\\','/')" | Out-Null
+        --window-size=1180,760 --screenshot=$png "file:///$($htmlPath -replace '\\','/')" | Out-Null
 
 Write-Host "html: $htmlPath"
 Write-Host "png : $png ($((Get-Item $png).Length) bytes)"
+
+
 
 

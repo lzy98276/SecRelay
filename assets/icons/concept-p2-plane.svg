@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>SecRelay 图标 P2 · 折面纸飞机 + 粗弧形连接箭头</title>
+  <defs>
+    <filter id="p2-sh" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0B4A8C" flood-opacity="0.18"/>
+    </filter>
+    <filter id="p2-ash" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0B4A8C" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+
+  <!-- 纸飞机：近翼（机身）一个折面、远翼一个折面 -->
+  <g filter="url(#p2-sh)">
+    <path d="M152,137 L72,40 L78,107 Z" fill="#78BAE6"/>
+    <path d="M152,137 L78,107 L27,151 Z" fill="#127AD2"/>
+  </g>
+
+  <!-- 连接：短而粗的弧形箭头，三角头明显 -->
+  <g filter="url(#p2-ash)">
+    <path d="M164.9,207.2 C186.9,211.6 200,207.2 213.3,189.6"
+          fill="none" stroke="#F2A33C" stroke-width="16" stroke-linecap="round"/>
+    <path d="M226.4,172 L228.2,200.8 L198.3,178.4 Z" fill="#F2A33C"/>
+  </g>
+</svg>
