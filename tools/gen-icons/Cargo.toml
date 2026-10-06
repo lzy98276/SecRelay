@@ -1,0 +1,14 @@
+[package]
+name = "gen-icons"
+description = "从 FluentSystemIcons 字体生成 Slint 图标码位表"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "gen-icons"
+path = "src/main.rs"
+
+[dependencies]

@@ -7,11 +7,17 @@
 //
 // 文案约定：这个文件里**不允许出现任何面向用户的字面量**。
 //   所有文案来自 `Strings` 全局，由 Rust 从 secrelay-i18n 注入。
+//   图标同理，来自 `Icons` 全局（由 tools/gen-icons 从字体生成）。
 //
 // 布局约定：不给 HorizontalLayout 设 alignment（它会把主轴也居中）。
 //   需要垂直居中的小元素用 `VerticalLayout { alignment: center; ... }` 包起来。
 
-import { Button, LineEdit, ScrollView } from "std-widgets.slint";
+import { LineEdit, ScrollView } from "std-widgets.slint";
+import { Icons } from "icons.slint";
+
+// 图标字体在编译期嵌入。Slint 用 import 直接引用 .ttf 文件。
+// family 名必须与字体内部一致（可用 `cargo run -p gen-icons` 查出来）。
+import "../../../assets/fonts/FluentSystemIcons-Resizable.ttf";
 
 // ───────────────────────────────────────────── 设计令牌
 //
@@ -32,7 +38,8 @@ export global Theme {
     out property <color> idle: #4a4e59;
     out property <length> radius: 8px;
     out property <length> pad: 22px;
-    out property <length> nav-width: 200px;
+    out property <length> nav-width: 208px;
+    out property <length> icon-size: 16px;
 
     // 强调色：默认值只是兜底，实际由 Rust 按系统主题覆盖。
     // 兜底值 = Windows 出厂默认强调色（Fluent 蓝），与 Rust 侧 FALLBACK_ACCENT 一致。
@@ -99,12 +106,79 @@ export struct ChatMessage {
 }
 
 // ───────────────────────────────────────────── 基础组件
+
+/** 图标。
+ *
+ *  码位来自 `Icons`（由 tools/gen-icons 从字体生成），字体在文件顶部 import。
+ *  注意：FluentSystemIcons **没有连字**，不能写 `text: "home"`，必须用码位。 */
+component Icon inherits Text {
+    in property <string> glyph: "";
+    in property <length> size: Theme.icon-size;
+    in property <color> tint: Theme.text-dim;
+
+    text: root.glyph;
+    font-family: "FluentSystemIcons-Resizable";
+    font-size: root.size;
+    color: root.tint;
+    vertical-alignment: center;
+    horizontal-alignment: center;
+}
+
+/** 带图标的主操作按钮。
+ *
+ *  不用 std-widgets 的 Button：它的图标只接受 image，而我们的图标来自字体，
+ *  自绘才能把字形和文字排在一起。 */
+component ActionButton inherits Rectangle {
+    in property <string> glyph: "";
+    in property <string> label: "";
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked();
+
+    height: 34px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.primary ? Theme.accent : Theme.border;
+    background: !root.enabled ? Theme.surface
+        : (ta.pressed ? Theme.surface-hi
+        : (root.primary ? Theme.accent-soft : (ta.has-hover ? Theme.surface-hi : Theme.surface)));
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 14px;
+        spacing: 8px;
+
+        Icon {
+            glyph: root.glyph;
+            size: 15px;
+            visible: root.glyph != "";
+            tint: !root.enabled ? Theme.text-faint
+                : (root.primary ? Theme.accent : Theme.text-dim);
+        }
+        Text {
+            text: root.label;
+            color: !root.enabled ? Theme.text-faint
+                : (root.primary ? Theme.accent : Theme.text);
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+}
+
 component NavItem inherits Rectangle {
     in property <string> label: "";
+    in property <string> glyph: "";
     in property <bool> active: false;
     callback clicked();
 
-    height: 32px;
+    height: 34px;
     border-radius: 6px;
     background: root.active ? Theme.surface-hi : (ta.has-hover ? Theme.surface : transparent);
 
@@ -117,7 +191,7 @@ component NavItem inherits Rectangle {
     HorizontalLayout {
         padding-left: 11px;
         padding-right: 10px;
-        spacing: 8px;
+        spacing: 9px;
 
         // 选中指示条
         VerticalLayout {
@@ -128,6 +202,11 @@ component NavItem inherits Rectangle {
                 border-radius: 2px;
                 background: root.active ? Theme.accent : transparent;
             }
+        }
+        Icon {
+            glyph: root.glyph;
+            width: 18px;
+            tint: root.active ? Theme.accent : Theme.text-dim;
         }
         Text {
             text: root.label;
@@ -156,10 +235,33 @@ component NavGroupLabel inherits Rectangle {
     }
 }
 
-component PageTitle inherits Text {
-    color: Theme.text;
-    font-size: 19px;
-    font-weight: 600;
+/** 页面标题：图标 + 文字。 */
+component PageHeader inherits HorizontalLayout {
+    in property <string> title: "";
+    in property <string> glyph: "";
+    in property <string> note: "";
+    height: 26px;
+    spacing: 9px;
+
+    Icon {
+        glyph: root.glyph;
+        size: 18px;
+        tint: Theme.accent;
+    }
+    Text {
+        text: root.title;
+        color: Theme.text;
+        font-size: 19px;
+        font-weight: 600;
+        vertical-alignment: center;
+    }
+    Text {
+        text: root.note;
+        color: Theme.text-faint;
+        font-size: 11px;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
 }
 
 component Card inherits Rectangle {
@@ -174,16 +276,14 @@ component PlaceholderPage inherits VerticalLayout {
     alignment: center;
 
     Rectangle {
-        width: 44px;
-        height: 44px;
-        border-radius: 22px;
+        width: 48px;
+        height: 48px;
+        border-radius: 24px;
         background: Theme.surface;
-        Text {
-            text: "·";
-            color: Theme.text-faint;
-            font-size: 24px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        Icon {
+            glyph: Icons.warning;
+            size: 20px;
+            tint: Theme.text-faint;
         }
     }
     Text {
@@ -212,11 +312,14 @@ component DevicesPage inherits VerticalLayout {
     padding: Theme.pad;
     spacing: 14px;
 
-    PageTitle { text: Strings.devices-title; }
+    PageHeader {
+        title: Strings.devices-title;
+        glyph: Icons.devices;
+    }
 
     // 连接条
     Card {
-        height: 60px;
+        height: 58px;
         HorizontalLayout {
             padding-left: 16px;
             padding-right: 16px;
@@ -245,8 +348,10 @@ component DevicesPage inherits VerticalLayout {
                 vertical-alignment: center;
                 horizontal-stretch: 1;
             }
-            Button {
-                text: root.connected ? Strings.action-disconnect : Strings.action-connect;
+            ActionButton {
+                primary: !root.connected;
+                glyph: Icons.connect;
+                label: root.connected ? Strings.action-disconnect : Strings.action-connect;
                 clicked => {
                     root.toggle-connect();
                 }
@@ -316,6 +421,11 @@ component DevicesPage inherits VerticalLayout {
             padding: 18px;
             spacing: 10px;
             alignment: center;
+            Icon {
+                glyph: Icons.devices;
+                size: 28px;
+                tint: Theme.text-faint;
+            }
             Text {
                 text: Strings.devices-empty;
                 color: Theme.text-dim;
@@ -343,16 +453,10 @@ component ScreenPage inherits VerticalLayout {
     padding: Theme.pad;
     spacing: 14px;
 
-    HorizontalLayout {
-        spacing: 12px;
-        PageTitle { text: Strings.preview-title; }
-        Text {
-            text: root.preview-stats;
-            color: Theme.text-faint;
-            font-size: 11px;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-        }
+    PageHeader {
+        title: Strings.preview-title;
+        glyph: Icons.screen;
+        note: root.preview-stats;
     }
 
     // 画面舞台
@@ -370,8 +474,13 @@ component ScreenPage inherits VerticalLayout {
 
         if !root.previewing : VerticalLayout {
             padding: 24px;
-            spacing: 10px;
+            spacing: 12px;
             alignment: center;
+            Icon {
+                glyph: Icons.screen;
+                size: 32px;
+                tint: Theme.text-faint;
+            }
             Text {
                 text: Strings.preview-empty;
                 color: Theme.text-dim;
@@ -390,8 +499,10 @@ component ScreenPage inherits VerticalLayout {
 
     HorizontalLayout {
         spacing: 12px;
-        Button {
-            text: root.previewing ? Strings.action-preview-stop : Strings.action-preview-start;
+        ActionButton {
+            primary: !root.previewing;
+            glyph: root.previewing ? Icons.stop : Icons.play;
+            label: root.previewing ? Strings.action-preview-stop : Strings.action-preview-start;
             clicked => {
                 root.toggle-preview();
             }
@@ -417,19 +528,30 @@ component MessagesPage inherits VerticalLayout {
     padding: Theme.pad;
     spacing: 14px;
 
-    PageTitle { text: Strings.nav-messages; }
+    PageHeader {
+        title: Strings.nav-messages;
+        glyph: Icons.messages;
+    }
 
     Rectangle {
         vertical-stretch: 1;
         background: Theme.surface;
         border-radius: Theme.radius;
 
-        if root.messages.length == 0 : Text {
-            text: Strings.messages-empty;
-            color: Theme.text-faint;
-            font-size: 12px;
-            horizontal-alignment: center;
-            vertical-alignment: center;
+        if root.messages.length == 0 : VerticalLayout {
+            alignment: center;
+            spacing: 10px;
+            Icon {
+                glyph: Icons.messages;
+                size: 28px;
+                tint: Theme.text-faint;
+            }
+            Text {
+                text: Strings.messages-empty;
+                color: Theme.text-faint;
+                font-size: 12px;
+                horizontal-alignment: center;
+            }
         }
 
         ScrollView {
@@ -476,9 +598,11 @@ component MessagesPage inherits VerticalLayout {
                 root.submit(root.draft);
             }
         }
-        Button {
-            text: Strings.action-send;
+        ActionButton {
+            primary: true;
             enabled: root.connected;
+            glyph: Icons.send;
+            label: Strings.action-send;
             clicked => {
                 root.submit(root.draft);
             }
@@ -495,18 +619,30 @@ component SettingsPage inherits VerticalLayout {
     padding: Theme.pad;
     spacing: 14px;
 
-    PageTitle { text: Strings.settings-title; }
+    PageHeader {
+        title: Strings.settings-title;
+        glyph: Icons.settings;
+    }
 
     Card {
-        height: 96px;
+        height: 100px;
         VerticalLayout {
             padding: 16px;
             spacing: 8px;
-            Text {
-                text: Strings.settings-language;
-                color: Theme.text;
-                font-size: 13px;
-                font-weight: 600;
+
+            HorizontalLayout {
+                spacing: 9px;
+                Icon {
+                    glyph: Icons.language;
+                    tint: Theme.text-dim;
+                }
+                Text {
+                    text: Strings.settings-language;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
             }
             Text {
                 text: root.language-name;
@@ -524,15 +660,24 @@ component SettingsPage inherits VerticalLayout {
 
     // 诊断：日志不进界面，只给一个入口
     Card {
-        height: 118px;
+        height: 148px;
         VerticalLayout {
             padding: 16px;
             spacing: 8px;
-            Text {
-                text: Strings.settings-diagnostics;
-                color: Theme.text;
-                font-size: 13px;
-                font-weight: 600;
+
+            HorizontalLayout {
+                spacing: 9px;
+                Icon {
+                    glyph: Icons.info;
+                    tint: Theme.text-dim;
+                }
+                Text {
+                    text: Strings.settings-diagnostics;
+                    color: Theme.text;
+                    font-size: 13px;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
             }
             Text {
                 text: Strings.settings-log-dir-hint;
@@ -547,10 +692,11 @@ component SettingsPage inherits VerticalLayout {
                 wrap: word-wrap;
             }
             HorizontalLayout {
-                height: 30px;
+                height: 34px;
                 alignment: start;
-                Button {
-                    text: Strings.action-open-log-dir;
+                ActionButton {
+                    glyph: Icons.folder_open;
+                    label: Strings.action-open-log-dir;
                     clicked => {
                         root.open-log-dir();
                     }
@@ -623,6 +769,7 @@ export component AppWindow inherits Window {
                 NavGroupLabel { text: Strings.group-connect; }
                 NavItem {
                     label: Strings.nav-devices;
+                    glyph: Icons.devices;
                     active: root.current-page == 0;
                     clicked => {
                         root.current-page = 0;
@@ -632,6 +779,7 @@ export component AppWindow inherits Window {
                 NavGroupLabel { text: Strings.group-see; }
                 NavItem {
                     label: Strings.nav-screen;
+                    glyph: Icons.screen;
                     active: root.current-page == 1;
                     clicked => {
                         root.current-page = 1;
@@ -639,6 +787,7 @@ export component AppWindow inherits Window {
                 }
                 NavItem {
                     label: Strings.nav-camera;
+                    glyph: Icons.camera;
                     active: root.current-page == 2;
                     clicked => {
                         root.current-page = 2;
@@ -648,6 +797,7 @@ export component AppWindow inherits Window {
                 NavGroupLabel { text: Strings.group-transfer; }
                 NavItem {
                     label: Strings.nav-files;
+                    glyph: Icons.files;
                     active: root.current-page == 3;
                     clicked => {
                         root.current-page = 3;
@@ -657,6 +807,7 @@ export component AppWindow inherits Window {
                 NavGroupLabel { text: Strings.group-talk; }
                 NavItem {
                     label: Strings.nav-messages;
+                    glyph: Icons.messages;
                     active: root.current-page == 4;
                     clicked => {
                         root.current-page = 4;
@@ -671,6 +822,7 @@ export component AppWindow inherits Window {
                 NavGroupLabel { text: Strings.group-system; }
                 NavItem {
                     label: Strings.nav-settings;
+                    glyph: Icons.settings;
                     active: root.current-page == 5;
                     clicked => {
                         root.current-page = 5;

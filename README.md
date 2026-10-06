@@ -88,7 +88,11 @@ crates/
   secrelay-theme/       主题色：读取系统强调色（Windows 注册表 / macOS defaults / GNOME·KDE·GTK）
 apps/
   secrelay-cli/         命令行工具、M0 自检与采集探针
-  secrelay-desktop/     桌面客户端（Slint UI：左侧导航 + 分页面 + i18n）
+  secrelay-desktop/     桌面客户端（Slint UI：左侧导航 + 分页面 + i18n + 图标字体）
+tools/
+  gen-icons/            从图标字体生成 Slint 码位表（零依赖 TTF 解析）
+assets/
+  fonts/                Fluent System Icons（MIT）+ 许可证与使用说明
 docs/
   需求分析.md            主文档：需求、平台矩阵、选型、风险、决策点
   measurements.md       M0 探针实测记录（可复现的性能数字）
@@ -116,6 +120,8 @@ docs/
 - **桌面客户端**（Slint UI：**左侧导航分组 + 分页面**，中文 i18n，日志写文件不进界面）
 - **类型安全 i18n**（68 条文案 × 简体中文；新增语言漏翻会编译失败）
 - **跟随系统强调色**（Windows 注册表 / macOS / GNOME·KDE·GTK；取不到则回退 Windows 出厂默认蓝 `#0078D4`）
+- **Fluent System Icons 实心图标**（码位由 `tools/gen-icons` 从字体生成，不手抄；
+  字体在编译期由 Slint 嵌入）
 - 本机画面预览（采集 → 像素转换 → 界面显示；实测 CPU 拷贝路径约 1 个核心，见 measurements）
 
 **未实现（下一步）**

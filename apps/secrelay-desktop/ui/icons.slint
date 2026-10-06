@@ -1,0 +1,41 @@
+// 由 `cargo run -p gen-icons` 从字体自动生成，**不要手工编辑**。
+//
+// 来源字体：assets/fonts/FluentSystemIcons-Resizable.ttf（family：FluentSystemIcons-Resizable）
+//
+// FluentSystemIcons 没有连字特性，图标只能按 Private Use Area 码位访问，
+// 所以这里把码位固化成常量。用法见 ui/app.slint 里的 `Icon` 组件。
+
+export global Icons {
+    // ic_fluent_desktop_20_filled
+    out property <string> devices: "\u{E62E}";
+    // ic_fluent_share_screen_start_20_filled
+    out property <string> screen: "\u{EF4A}";
+    // ic_fluent_camera_20_filled
+    out property <string> camera: "\u{E391}";
+    // ic_fluent_folder_20_filled
+    out property <string> files: "\u{E874}";
+    // ic_fluent_chat_20_filled
+    out property <string> messages: "\u{E3E3}";
+    // ic_fluent_settings_20_filled
+    out property <string> settings: "\u{EF26}";
+    // ic_fluent_plug_connected_20_filled
+    out property <string> connect: "\u{EDC6}";
+    // ic_fluent_send_20_filled
+    out property <string> send: "\u{EF10}";
+    // ic_fluent_play_20_filled
+    out property <string> play: "\u{EDB8}";
+    // ic_fluent_stop_20_filled
+    out property <string> stop: "\u{F086}";
+    // ic_fluent_folder_open_20_filled
+    out property <string> folder_open: "\u{E88C}";
+    // ic_fluent_local_language_20_filled
+    out property <string> language: "\u{EACD}";
+    // ic_fluent_info_20_filled
+    out property <string> info: "\u{E9E3}";
+    // ic_fluent_warning_20_filled
+    out property <string> warning: "\u{F430}";
+    // ic_fluent_checkmark_circle_20_filled
+    out property <string> checkmark: "\u{E425}";
+    // ic_fluent_dismiss_circle_20_filled
+    out property <string> dismiss: "\u{E672}";
+}
