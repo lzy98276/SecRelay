@@ -9,8 +9,11 @@
 //! 2. 文件通道的实现路径（复用 ICE + `quinn` vs 直接用 `iroh`）还没定（D24），
 //!    定下来之前上层代码不该知道它用的是哪个。
 //!
-//! 本 crate 目前只提供 **回环传输**（[`loopback_pair`]），用于在没有真实网络的情况下
-//! 验证协议与会话模型。真实实现是下一步的事。
+//! 本 crate 提供两种实现：
+//!
+//! - [`WebRtcTransport`]：真实网络上的 ICE 打洞 + DataChannel，ICE 服务器列表由
+//!   [`IceConfig`] 传入（STUN/TURN + 短期凭据）。
+//! - [`loopback_pair`]：进程内回环，让协议与会话逻辑能脱离真实网络被测试。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -19,6 +22,15 @@ use async_trait::async_trait;
 use secrelay_protocol::Frame;
 use thiserror::Error;
 use tokio::sync::{mpsc, Mutex};
+
+pub mod ice;
+mod webrtc_transport;
+
+pub use ice::{parse_bind_addr, IceConfig, IceServerConfig};
+pub use webrtc_transport::{
+    CandidatePair, WebRtcTransport, DATA_CHANNEL_LABEL, DEFAULT_CONNECT_TIMEOUT,
+    DEFAULT_GATHER_TIMEOUT, MAX_DATACHANNEL_MESSAGE,
+};
 
 /// 回环通道的缓冲帧数。
 const LOOPBACK_CAPACITY: usize = 64;
@@ -30,6 +42,9 @@ pub enum TransportError {
 
     #[error("底层 I/O 失败：{0}")]
     Io(String),
+
+    #[error("WebRTC 失败：{0}")]
+    WebRtc(String),
 
     #[error("协议错误：{0}")]
     Protocol(#[from] secrelay_protocol::ProtocolError),

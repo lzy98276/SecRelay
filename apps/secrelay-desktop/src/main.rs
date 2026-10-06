@@ -1,4 +1,4 @@
-﻿//! SecRelay 桌面客户端。
+//! SecRelay 桌面客户端。
 //!
 //! 界面用 Slint 官方 Material 组件库搭（见 `ui/app.slint`），本文件只负责：
 //! 组装窗口、把配置与探测结果注入 `Strings` / `UiFont`、转发用户操作。
@@ -6,20 +6,21 @@
 slint::include_modules!();
 
 mod bridge;
+mod relay;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
 use secrelay_i18n::{weight_name, Key, Lang};
-use secrelay_theme::{accent_from_hsv, AccentMode, ColorScheme as ThemeColorScheme, FontCatalog, Preferences, Rgb, ThemeMode};
+use secrelay_theme::{accent_from_hsv, AccentMode, ColorScheme as ThemeColorScheme, FontCatalog, Preferences, Relays, Rgb, ThemeMode};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 fn main() -> anyhow::Result<()> {
     let _log_guard = init_logging();
 
     let lang = Lang::default();
-    let mut preferences = Preferences::load();
+    let preferences = Preferences::load();
     let detected_accent = secrelay_theme::detect_accent();
     let system_scheme = secrelay_theme::platform::detect_color_scheme();
 
@@ -45,6 +46,9 @@ fn main() -> anyhow::Result<()> {
         saturation: preferences.saturation,
         family: preferences.font_family.clone(),
         weight_tier: preferences.font_weight,
+        relays: preferences.relays.clone(),
+        relay_ui: relay::RelayUi::new(&preferences.relays),
+        relay_timer: None,
     }));
 
     // --settings-only：只创建设置窗口，用于测试与截图。
@@ -55,10 +59,13 @@ fn main() -> anyhow::Result<()> {
         apply_appearance(&settings, None, &state.borrow(), detected_accent.color, system_scheme, &catalog, lang);
         push_font_options(&settings, &catalog, &state.borrow(), lang);
         apply_version(&settings);
+        push_relays(&settings, &state.borrow(), lang);
         if let Some(page) = arg_value("--settings-page").and_then(|value| value.parse::<i32>().ok()) {
             settings.set_settings_page(page.clamp(0, 3));
         }
         settings.on_open_log_dir_clicked(open_logs);
+        wire_relay_callbacks(&settings, &state, lang);
+        start_relay_watch(&settings, &state, lang);
         settings.run()?;
         return Ok(());
     }
@@ -72,10 +79,15 @@ fn main() -> anyhow::Result<()> {
         let state = state.borrow();
         apply_appearance(&settings, Some(&ui), &state, detected_accent.color, system_scheme, &catalog, lang);
         push_font_options(&settings, &catalog, &state, lang);
+        push_relays(&settings, &state, lang);
     }
     apply_version(&settings);
     settings.set_theme_mode(preferences.theme_mode.index());
     settings.hide()?;
+
+    // 中继的核对在后台跑，结果由定时器搬到界面上
+    wire_relay_callbacks(&settings, &state, lang);
+    start_relay_watch(&settings, &state, lang);
 
     if let Some(page) = arg_value("--page").and_then(|value| value.parse::<i32>().ok()) {
         ui.set_current_page(page.clamp(0, 4));
@@ -278,7 +290,150 @@ struct UiState {
     saturation: f32,
     family: String,
     weight_tier: u16,
+    /// 中继列表与当前选中项。
+    relays: Relays,
+    /// 各中继的探测状态。
+    relay_ui: relay::RelayUi,
+    /// 轮询中继探测结果的定时器；`UiState` 活多久它就跑多久。
+    relay_timer: Option<Rc<slint::Timer>>,
 }
+
+// ────────────────────────────────────────────────────── 中继
+
+/// 把中继列表与探测状态推给设置窗口。
+fn push_relays(settings: &SettingsWindow, state: &UiState, lang: Lang) {
+    relay::push(settings, &state.relays, &state.relay_ui, lang);
+}
+
+/// 接上中继相关的界面回调。
+fn wire_relay_callbacks(settings: &SettingsWindow, state: &Rc<RefCell<UiState>>, lang: Lang) {
+    {
+        let state = state.clone();
+        let weak = settings.as_weak();
+        settings.on_relay_selected(move |index| {
+            if index < 0 {
+                return;
+            }
+            let url = {
+                let mut state = state.borrow_mut();
+                state.relays.select(index as usize);
+                save(&current_prefs(&state));
+                state.relays.selected_url().to_string()
+            };
+            state.borrow().relay_ui.check(&url);
+            // 选中态要立刻反映在列表上
+            if let Some(settings) = weak.upgrade() {
+                push_relays(&settings, &state.borrow(), lang);
+            }
+        });
+    }
+
+    {
+        let state = state.clone();
+        let weak = settings.as_weak();
+        settings.on_relay_removed(move |url| {
+            let removed = {
+                let mut state = state.borrow_mut();
+                let index = state
+                    .relays
+                    .urls()
+                    .iter()
+                    .position(|existing| existing == url.as_str());
+                match index {
+                    Some(index) => {
+                        state.relays.remove(index);
+                        let relays = state.relays.clone();
+                        state.relay_ui.resync(&relays);
+                        save(&current_prefs(&state));
+                        true
+                    }
+                    None => false,
+                }
+            };
+            if removed {
+                tracing::info!(relay = %url, "已删除中继");
+            }
+            if let Some(settings) = weak.upgrade() {
+                push_relays(&settings, &state.borrow(), lang);
+            }
+        });
+    }
+
+    {
+        let state = state.clone();
+        let weak = settings.as_weak();
+        settings.on_relay_add_clicked(move |input| {
+            let outcome = {
+                let mut state = state.borrow_mut();
+                match state.relays.add(input.as_str()) {
+                    Ok(_) => {
+                        let relays = state.relays.clone();
+                        state.relay_ui.resync(&relays);
+                        save(&current_prefs(&state));
+                        Ok(())
+                    }
+                    Err(err) => Err(err),
+                }
+            };
+            if let Some(settings) = weak.upgrade() {
+                match outcome {
+                    Ok(()) => {
+                        settings.set_relay_input("".into());
+                        settings.set_relay_input_error("".into());
+                        // 新地址的核对交给定时器，这里不等网络
+                    }
+                    Err(err) => settings.set_relay_input_error(err.into()),
+                }
+                push_relays(&settings, &state.borrow(), lang);
+            }
+        });
+    }
+
+    {
+        let weak = settings.as_weak();
+        let state = state.clone();
+        settings.on_relay_probe_clicked(move || {
+            let url = {
+                let state = state.borrow();
+                state.relays.selected_url().to_string()
+            };
+            state.borrow().relay_ui.check(&url);
+            if let Some(settings) = weak.upgrade() {
+                push_relays(&settings, &state.borrow(), lang);
+            }
+        });
+    }
+}
+
+/// 定时把中继的探测结果搬到界面上。
+///
+/// 界面线程不做网络等待：这里只取工作线程回投的结果，顺带把还没核对过的地址排上。
+fn start_relay_watch(settings: &SettingsWindow, state: &Rc<RefCell<UiState>>, lang: Lang) {
+    const WATCH_INTERVAL: Duration = Duration::from_millis(250);
+
+    let weak = settings.as_weak();
+    let watched = state.clone();
+    let timer = Rc::new(slint::Timer::default());
+    timer.start(slint::TimerMode::Repeated, WATCH_INTERVAL, move || {
+        if weak.upgrade().is_none() {
+            return;
+        }
+        let changed = {
+            let mut state = watched.borrow_mut();
+            let changed = state.relay_ui.apply_updates();
+            state.relay_ui.check_pending();
+            changed
+        };
+        if changed {
+            if let Some(settings) = weak.upgrade() {
+                push_relays(&settings, &watched.borrow(), lang);
+            }
+        }
+    });
+    // Timer 一 drop 就停，所以要挂在状态上
+    state.borrow_mut().relay_timer = Some(timer);
+}
+
 
 /// 强调色种子：跟随系统时用探测到的系统色，自定义时由色相 + 饱和度算。
 fn accent_seed(state: &UiState, detected: Rgb) -> Rgb {
@@ -439,6 +594,7 @@ fn current_prefs(state: &UiState) -> Preferences {
         accent_mode: state.accent_mode,
         hue: state.hue,
         saturation: state.saturation,
+        relays: state.relays.clone(),
     }
 }
 

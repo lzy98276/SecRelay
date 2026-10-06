@@ -1,4 +1,4 @@
-﻿// SecRelay 界面。
+// SecRelay 界面。
 //
 // 控件一律用 Slint 内置的 fluent 风格组件（Button / ComboBox / Slider / Switch /
 // LineEdit / ScrollView / GroupBox），本文件只负责布局。
@@ -88,6 +88,33 @@ export global Strings {
     in property <string> settings-diagnostics: "";
     in property <string> settings-log-dir-hint: "";
 
+    in property <string> settings-relay: "";
+    in property <string> relay-hint: "";
+    in property <string> relay-list: "";
+    in property <string> relay-default: "";
+    in property <string> relay-add: "";
+    in property <string> relay-add-placeholder: "";
+    in property <string> relay-add-hint: "";
+    in property <string> relay-remove: "";
+    in property <string> relay-selected: "";
+    in property <string> relay-id-local: "";
+    in property <string> relay-id-advertised: "";
+    in property <string> relay-id-match: "";
+    in property <string> relay-id-mismatch: "";
+    in property <string> relay-id-mismatch-hint: "";
+    in property <string> relay-id-malformed: "";
+    in property <string> relay-probe: "";
+    in property <string> relay-probing: "";
+    in property <string> relay-reachable: "";
+    in property <string> relay-unreachable: "";
+    in property <string> relay-turn-ready: "";
+    in property <string> relay-turn-missing: "";
+    in property <string> relay-not-checked: "";
+    in property <string> relay-proto-mismatch: "";
+    in property <string> relay-no-active: "";
+    in property <string> relay-signaling: "";
+    in property <string> relay-current: "";
+
     in property <string> theme-follow-system: "";
     in property <string> theme-light: "";
     in property <string> theme-dark: "";
@@ -104,6 +131,20 @@ export global Strings {
 export struct ChatMessage {
     text: string,
     outgoing: bool,
+}
+
+export struct RelayRow {
+    url: string,
+    id: string,
+    status: string,
+    probe: string,
+    selected: bool,
+    mismatch: bool,
+}
+
+export struct RelayDetail {
+    label: string,
+    value: string,
 }
 
 // ───────────────────────────────────────────── 通用块
@@ -355,14 +396,17 @@ component MessagesPage inherits VerticalLayout {
                         border-radius: 8px;
                         max-width: min(root.width * 0.7, 460px);
 
-                        Text {
-                            text: message.text;
+                        // padding 只对布局元素生效，所以包一层
+                        HorizontalLayout {
                             padding: 10px;
-                            font-size: 13px;
-                            wrap: word-wrap;
-                            color: message.outgoing
-                                ? Palette.accent-foreground
-                                : Palette.foreground;
+                            Text {
+                                text: message.text;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                                color: message.outgoing
+                                    ? Palette.accent-foreground
+                                    : Palette.foreground;
+                            }
                         }
                     }
                 }
@@ -387,6 +431,94 @@ component MessagesPage inherits VerticalLayout {
             enabled: root.connected;
             clicked => {
                 root.submit(root.draft);
+            }
+        }
+    }
+}
+
+// ───────────────────────────────────────────── 中继列表
+
+component RelayList inherits VerticalLayout {
+    in property <[RelayRow]> rows: [];
+    in property <int> current: -1;
+    in property <string> remove-text: "";
+    in property <string> empty-text: "";
+    callback select(int);
+    callback remove(string);
+
+    spacing: 1px;
+
+    if root.rows.length == 0 : Text {
+        text: root.empty-text;
+        font-size: 13px;
+        color: Palette.foreground;
+        opacity: 0.6;
+    }
+
+    for entry[idx] in root.rows : Rectangle {
+        min-height: 46px;
+        background: idx == root.current
+            ? Palette.control-background
+            : Palette.alternate-background;
+
+        HorizontalLayout {
+            padding: 6px;
+            spacing: 8px;
+
+            // 选中态：左侧一条强调色
+            Rectangle {
+                width: 3px;
+                background: idx == root.current ? Palette.accent-background : transparent;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                horizontal-stretch: 1;
+
+                Text {
+                    text: entry.url;
+                    font-size: 13px;
+                    font-weight: idx == root.current ? 600 : 400;
+                    color: Palette.foreground;
+                    wrap: no-wrap;
+                    overflow: elide;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    Text {
+                        text: entry.status;
+                        font-size: 11px;
+                        color: Palette.foreground;
+                        opacity: entry.mismatch ? 0.85 : 1.0;
+                    }
+                    Text {
+                        text: entry.probe;
+                        font-size: 11px;
+                        color: Palette.foreground;
+                        opacity: 0.6;
+                    }
+                    Text {
+                        text: entry.id;
+                        font-size: 11px;
+                        color: Palette.foreground;
+                        opacity: 0.6;
+                    }
+                }
+            }
+
+            Button {
+                text: root.remove-text;
+                clicked => {
+                    root.remove(entry.url);
+                }
+            }
+        }
+
+        // 点行本身即选中；按钮在上面，点按钮不会走到这里
+        TouchArea {
+            clicked => {
+                root.select(idx);
             }
         }
     }
@@ -568,12 +700,27 @@ export component SettingsWindow inherits Window {
     in property <string> log-dir: "";
     in property <string> version: "";
 
+    // 中继：列表、当前选中、正在输入的地址与错误提示
+    in property <[RelayRow]> relays: [];
+    in property <int> relay-index: -1;
+    in property <string> relay-current: "";
+    in property <string> relay-current-hint: "";
+    in property <[RelayDetail]> relay-details: [];
+    in-out property <string> relay-input: "";
+    in property <string> relay-input-error: "";
+    /// 只有选中项真的 ID 不符时才提示
+    in property <bool> relay-mismatch: false;
+
     callback theme-mode-changed(int);
     callback accent-mode-changed(int);
     callback accent-changed(float, float);
     callback family-selected(int);
     callback weight-selected(int);
     callback open-log-dir-clicked();
+    callback relay-selected(int);
+    callback relay-removed(string);
+    callback relay-add-clicked(string);
+    callback relay-probe-clicked();
 
     HorizontalLayout {
         spacing: 0;
@@ -770,6 +917,103 @@ export component SettingsWindow inherits Window {
                     spacing: 16px;
                     alignment: start;
                     PageTitle { text: Strings.settings-diagnostics; }
+
+                    // ── 中继
+                    GroupBox {
+                        title: Strings.settings-relay;
+                        VerticalLayout {
+                            spacing: 8px;
+                            HintText { text: Strings.relay-hint; }
+
+                            Text {
+                                text: Strings.relay-current;
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: Palette.foreground;
+                            }
+                            Text {
+                                text: root.relay-current;
+                                font-size: 13px;
+                                wrap: word-wrap;
+                                color: Palette.accent-background;
+                            }
+                            Text {
+                                text: root.relay-current-hint;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                                color: Palette.foreground;
+                                opacity: 0.75;
+                            }
+
+                            for detail in root.relay-details : FieldRow {
+                                label: detail.label;
+                                value: detail.value;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+                                Button {
+                                    text: Strings.relay-probe;
+                                    clicked => {
+                                        root.relay-probe-clicked();
+                                    }
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+
+                            Rectangle { height: 1px; background: Palette.border; }
+
+                            Text {
+                                text: Strings.relay-list;
+                                font-size: 13px;
+                                font-weight: 600;
+                                color: Palette.foreground;
+                            }
+                            RelayList {
+                                rows: root.relays;
+                                current: root.relay-index;
+                                remove-text: Strings.relay-remove;
+                                empty-text: Strings.relay-no-active;
+                                select(index) => {
+                                    root.relay-selected(index);
+                                }
+                                remove(url) => {
+                                    root.relay-removed(url);
+                                }
+                            }
+
+                            if root.relay-mismatch : HintText { text: Strings.relay-id-mismatch-hint; }
+
+                            Rectangle { height: 1px; background: Palette.border; }
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                LineEdit {
+                                    horizontal-stretch: 1;
+                                    placeholder-text: Strings.relay-add-placeholder;
+                                    text <=> root.relay-input;
+                                    accepted => {
+                                        root.relay-add-clicked(root.relay-input);
+                                    }
+                                }
+                                Button {
+                                    text: Strings.relay-add;
+                                    primary: true;
+                                    clicked => {
+                                        root.relay-add-clicked(root.relay-input);
+                                    }
+                                }
+                            }
+                            if root.relay-input-error != "" : Text {
+                                text: root.relay-input-error;
+                                font-size: 11px;
+                                wrap: word-wrap;
+                                color: Palette.foreground;
+                            }
+                            HintText { text: Strings.relay-add-hint; }
+                        }
+                    }
+
                     GroupBox {
                         title: Strings.settings-diagnostics;
                         VerticalLayout {

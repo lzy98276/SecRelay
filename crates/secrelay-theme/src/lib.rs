@@ -1,4 +1,4 @@
-﻿//! SecRelay 主题：跟随系统强调色 + 浅色/深色配色。
+//! SecRelay 主题：跟随系统强调色 + 浅色/深色配色。
 //!
 //! # 为什么单独一个 crate
 //!
@@ -30,7 +30,7 @@ pub mod prefs;
 
 pub use fonts::{FontCatalog, FontEntry, ResolvedFont, BUILTIN_FAMILY, DEFAULT_WEIGHT};
 pub use palette::{accent_from_hsv, AccentMode, ColorScheme, Palette, ThemeMode};
-pub use prefs::Preferences;
+pub use prefs::{Preferences, Relays, DEFAULT_RELAY_BASE};
 
 /// 取不到系统强调色时的回退色：**Windows 出厂默认强调色**（Fluent 蓝）。
 ///

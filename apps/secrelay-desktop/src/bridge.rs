@@ -1,4 +1,4 @@
-﻿//! UI ↔ Rust 的桥接层。
+//! UI ↔ Rust 的桥接层。
 //!
 //! 这一层是需求分析 §6.1 里"UI 层只做三件事"的落点：**显示帧、显示状态、发出意图**。
 //! 它不认识 WebRTC，也不认识编码器；只跟 `secrelay-session` 的公开 API 打交道。
@@ -129,6 +129,33 @@ pub fn apply_strings(strings: Strings, lang: Lang) {
     strings.set_settings_font_hint(key(Key::SettingsFontHint));
     strings.set_settings_diagnostics(key(Key::SettingsDiagnostics));
     strings.set_settings_log_dir_hint(key(Key::SettingsLogDirHint));
+
+    strings.set_settings_relay(key(Key::SettingsRelay));
+    strings.set_relay_hint(key(Key::RelayHint));
+    strings.set_relay_list(key(Key::RelayList));
+    strings.set_relay_default(key(Key::RelayDefault));
+    strings.set_relay_add(key(Key::RelayAdd));
+    strings.set_relay_add_placeholder(key(Key::RelayAddPlaceholder));
+    strings.set_relay_add_hint(key(Key::RelayAddHint));
+    strings.set_relay_remove(key(Key::RelayRemove));
+    strings.set_relay_selected(key(Key::RelaySelected));
+    strings.set_relay_id_local(key(Key::RelayIdLocal));
+    strings.set_relay_id_advertised(key(Key::RelayIdAdvertised));
+    strings.set_relay_id_match(key(Key::RelayIdMatch));
+    strings.set_relay_id_mismatch(key(Key::RelayIdMismatch));
+    strings.set_relay_id_mismatch_hint(key(Key::RelayIdMismatchHint));
+    strings.set_relay_id_malformed(key(Key::RelayIdMalformed));
+    strings.set_relay_probe(key(Key::RelayProbe));
+    strings.set_relay_probing(key(Key::RelayProbing));
+    strings.set_relay_reachable(key(Key::RelayReachable));
+    strings.set_relay_unreachable(key(Key::RelayUnreachable));
+    strings.set_relay_turn_ready(key(Key::RelayTurnReady));
+    strings.set_relay_turn_missing(key(Key::RelayTurnMissing));
+    strings.set_relay_not_checked(key(Key::RelayNotChecked));
+    strings.set_relay_proto_mismatch(key(Key::RelayProtoMismatch));
+    strings.set_relay_no_active(key(Key::RelayNoActive));
+    strings.set_relay_signaling(key(Key::RelaySignaling));
+    strings.set_relay_current(key(Key::RelayCurrent));
 
     strings.set_theme_follow_system(key(Key::ThemeFollowSystem));
     strings.set_theme_light(key(Key::ThemeLight));

@@ -20,6 +20,11 @@ use crate::ThemeMode;
 /// 配置文件名。
 const FILE_NAME: &str = "config.txt";
 
+/// 内置的默认中继基址。
+///
+/// 与 `secrelay-relay-client` 的同名常量保持一致：这里存的是"文本"，不引入那个依赖。
+pub const DEFAULT_RELAY_BASE: &str = "https://relay.secrelay.dev";
+
 /// 本地偏好。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preferences {
@@ -35,6 +40,142 @@ pub struct Preferences {
     pub hue: f32,
     /// 自定义强调色的饱和度（0-100）。
     pub saturation: f32,
+    /// 中继列表与当前选中项。
+    pub relays: Relays,
+}
+
+/// 中继列表。
+///
+/// 只做文本层面的校验（非空、`http`/`https` 前缀），完整规范化由中继客户端负责 ——
+/// 这个 crate 不认识网络层，也就不该把 URL 解析规则复制一份。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relays {
+    urls: Vec<String>,
+    selected: usize,
+}
+
+impl Default for Relays {
+    fn default() -> Self {
+        Self {
+            urls: vec![DEFAULT_RELAY_BASE.to_string()],
+            selected: 0,
+        }
+    }
+}
+
+impl Relays {
+    /// 列表里的地址。
+    pub fn urls(&self) -> &[String] {
+        &self.urls
+    }
+
+    /// 当前选中的下标，恒小于 `urls().len()`。
+    pub fn selected(&self) -> usize {
+        self.selected.min(self.urls.len().saturating_sub(1))
+    }
+
+    /// 当前选中的地址。
+    pub fn selected_url(&self) -> &str {
+        &self.urls[self.selected()]
+    }
+
+    /// 从一组地址构造。非法地址被丢掉；空了就退回默认中继。
+    pub fn from_urls(urls: impl IntoIterator<Item = String>) -> Self {
+        let kept: Vec<String> = urls
+            .into_iter()
+            .map(|url| url.trim().to_string())
+            .filter(|url| is_acceptable_relay_url(url))
+            .collect();
+
+        if kept.is_empty() {
+            return Self::default();
+        }
+        Self {
+            urls: dedup(kept),
+            selected: 0,
+        }
+    }
+
+    /// 加一个地址。重复的也返回成功，只把选中项挪过去。
+    pub fn add(&mut self, url: &str) -> Result<usize, String> {
+        let url = url.trim();
+        if !is_acceptable_relay_url(url) {
+            return Err("中继地址必须以 http:// 或 https:// 开头".to_string());
+        }
+        match self.urls.iter().position(|existing| existing == url) {
+            Some(index) => {
+                self.selected = index;
+                Ok(index)
+            }
+            None => {
+                self.urls.push(url.to_string());
+                self.selected = self.urls.len() - 1;
+                Ok(self.selected)
+            }
+        }
+    }
+
+    /// 删掉一个地址。删掉最后一条时回到默认中继，不留空列表。
+    ///
+    /// 返回是否真的删掉了。
+    pub fn remove(&mut self, index: usize) -> bool {
+        if index >= self.urls.len() {
+            return false;
+        }
+        self.urls.remove(index);
+        if self.urls.is_empty() {
+            *self = Self::default();
+            return true;
+        }
+        // 删除位置之前的选中项要跟着往前挪，之后的不用动
+        if index < self.selected {
+            self.selected -= 1;
+        }
+        self.selected = self.selected.min(self.urls.len() - 1);
+        true
+    }
+
+    /// 选中某个地址。
+    pub fn select(&mut self, index: usize) {
+        if index < self.urls.len() {
+            self.selected = index;
+        }
+    }
+
+    /// 序列化成一行，地址之间用 `;` 分隔；`;` 转义成 `%3B`。
+    fn serialize(&self) -> String {
+        self.urls
+            .iter()
+            .map(|url| url.replace(';', "%3B"))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// 解析一行。空行与全是非法地址时退回默认中继。
+    fn parse(value: &str) -> Self {
+        let urls = value
+            .split(';')
+            .map(|part| part.trim().replace("%3B", ";"))
+            .collect::<Vec<_>>();
+        Self::from_urls(urls)
+    }
+}
+
+/// 地址是否是本程序能接受的形态：非空且以 `http://` 或 `https://` 开头（大小写不敏感）。
+fn is_acceptable_relay_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
+/// 去重，保留首次出现的顺序。
+fn dedup(urls: Vec<String>) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for url in urls {
+        if !seen.contains(&url) {
+            seen.push(url);
+        }
+    }
+    seen
 }
 
 impl Default for Preferences {
@@ -46,6 +187,7 @@ impl Default for Preferences {
             accent_mode: AccentMode::System,
             hue: 28.0,
             saturation: 78.0,
+            relays: Relays::default(),
         }
     }
 }
@@ -93,6 +235,8 @@ impl Preferences {
     /// 第一行的键会变成 `\u{FEFF}theme`，静默失效。
     pub fn parse(text: &str) -> Self {
         let mut prefs = Self::default();
+        let mut selected: Option<usize> = None;
+
         for line in text.trim_start_matches('\u{FEFF}').lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -137,8 +281,22 @@ impl Preferences {
                         }
                     }
                 }
+                // relays 与 relay_url 是同一个位置的两种写法：前者是列表，后者是旧版的单条。
+                "relays" | "relay_url" => {
+                    prefs.relays = Relays::parse(value);
+                }
+                "relay_selected" => {
+                    if let Ok(index) = value.parse::<usize>() {
+                        selected = Some(index);
+                    }
+                }
                 _ => {}
             }
+        }
+
+        // 选中项等所有行读完再应用：列表可能出现在它后面
+        if let Some(index) = selected {
+            prefs.relays.select(index);
         }
         prefs
     }
@@ -148,24 +306,30 @@ impl Preferences {
         format!(
             "# SecRelay 本地配置\n\
              # 手工编辑后重启生效。\n\
-             # theme:       system / light / dark\n\
-             # font_family: 系统里任意已安装字体的名字，misans 内置字体叫 MiSans\n\
-             # font_weight: 100 - 900，实际会用该字体最接近的可用字重\n\
-             # accent:      system / custom\n\
-             # hue:         0 - 360（仅 accent=custom 时生效）\n\
-             # saturation:  0 - 100（仅 accent=custom 时生效）\n\
+             # theme:          system / light / dark\n\
+             # font_family:    系统里任意已安装字体的名字，misans 内置字体叫 MiSans\n\
+             # font_weight:    100 - 900，实际会用该字体最接近的可用字重\n\
+             # accent:         system / custom\n\
+             # hue:            0 - 360（仅 accent=custom 时生效）\n\
+             # saturation:     0 - 100（仅 accent=custom 时生效）\n\
+             # relays:         中继基址，多条用 ; 分隔，只认 http:// 与 https://\n\
+             # relay_selected: 当前选中的中继下标，从 0 开始\n\
              theme={}\n\
              font_family={}\n\
              font_weight={}\n\
              accent={}\n\
              hue={}\n\
-             saturation={}\n",
+             saturation={}\n\
+             relays={}\n\
+             relay_selected={}\n",
             self.theme_mode.key(),
             self.font_family,
             self.font_weight,
             self.accent_mode.key(),
             self.hue,
-            self.saturation
+            self.saturation,
+            self.relays.serialize(),
+            self.relays.selected()
         )
     }
 }
@@ -180,6 +344,10 @@ mod tests {
         assert_eq!(prefs.theme_mode, ThemeMode::System);
         assert_eq!(prefs.font_family, "MiSans");
         assert_eq!(prefs.font_weight, 400);
+        // 默认中继开箱可用
+        assert_eq!(prefs.relays.urls(), [DEFAULT_RELAY_BASE]);
+        assert_eq!(prefs.relays.selected(), 0);
+        assert_eq!(prefs.relays.selected_url(), DEFAULT_RELAY_BASE);
     }
 
     #[test]
@@ -194,12 +362,37 @@ mod tests {
                         accent_mode,
                         hue: 123.5,
                         saturation: 42.0,
+                        relays: Relays::from_urls([
+                            "https://relay.example.com".to_string(),
+                            "http://127.0.0.1:8080".to_string(),
+                        ]),
                     };
                     let text = prefs.serialize();
                     assert_eq!(Preferences::parse(&text), prefs, "往返不一致：{text}");
                 }
             }
         }
+    }
+
+    #[test]
+    fn 中继列表往返一致且选中项保住() {
+        let mut relays = Relays::from_urls([
+            "https://relay.example.com".to_string(),
+            "http://127.0.0.1:8080".to_string(),
+            "https://relay.secrelay.dev".to_string(),
+        ]);
+        relays.select(1);
+
+        let prefs = Preferences {
+            relays: relays.clone(),
+            ..Preferences::default()
+        };
+        let text = prefs.serialize();
+        let parsed = Preferences::parse(&text);
+        assert_eq!(parsed.relays.urls(), relays.urls());
+        assert_eq!(parsed.relays.selected(), 1);
+        assert_eq!(parsed.relays.selected_url(), "http://127.0.0.1:8080");
+        assert_eq!(parsed, prefs);
     }
 
     #[test]
@@ -274,5 +467,124 @@ mod tests {
         let text = path.to_string_lossy().to_lowercase();
         assert!(text.contains("secrelay"), "实际：{text}");
         assert!(text.ends_with("config.txt"), "实际：{text}");
+    }
+
+    // ─────────────────────────────── 中继
+
+    #[test]
+    fn 中继列表里非_http_的地址被丢掉() {
+        let prefs = Preferences::parse(
+            "relays=https://a.example;ftp://b.example;ws://c.example;http://d.example;不是地址",
+        );
+        assert_eq!(
+            prefs.relays.urls(),
+            ["https://a.example", "http://d.example"],
+            "只留 http/https"
+        );
+    }
+
+    #[test]
+    fn 中继列表为空时退回默认中继() {
+        for text in [
+            "relays=",
+            "relays=;;;",
+            "relays=ftp://a.example",
+            "relay_url=",
+        ] {
+            assert_eq!(
+                Preferences::parse(text).relays,
+                Relays::default(),
+                "{text} 应当退回默认中继"
+            );
+        }
+    }
+
+    #[test]
+    fn 中继列表去重且顺序保留() {
+        let prefs = Preferences::parse(
+            "relays=https://a.example;https://b.example;https://a.example",
+        );
+        assert_eq!(prefs.relays.urls(), ["https://a.example", "https://b.example"]);
+    }
+
+    #[test]
+    fn 旧的单条中继字段仍然能读() {
+        let prefs = Preferences::parse("relay_url=http://127.0.0.1:8080\n");
+        assert_eq!(prefs.relays.urls(), ["http://127.0.0.1:8080"]);
+    }
+
+    #[test]
+    fn 选中项越界时回到第一条() {
+        let prefs = Preferences::parse("relays=https://a.example\nrelay_selected=9");
+        assert_eq!(prefs.relays.selected(), 0);
+        assert_eq!(prefs.relays.selected_url(), "https://a.example");
+    }
+
+    #[test]
+    fn 选中项写在列表前面也能生效() {
+        let prefs = Preferences::parse(
+            "relay_selected=1\nrelays=https://a.example;https://b.example",
+        );
+        assert_eq!(prefs.relays.selected_url(), "https://b.example");
+    }
+
+    #[test]
+    fn 增删中继与选中项联动() {
+        let mut relays = Relays::default();
+        let index = relays.add("https://b.example").unwrap();
+        assert_eq!(index, 1);
+        assert_eq!(relays.selected(), 1, "新加的会被选中");
+
+        // 重复添加只移动选中项，不新增
+        let same = relays.add("https://b.example").unwrap();
+        assert_eq!(same, 1);
+        assert_eq!(relays.urls().len(), 2);
+
+        assert!(relays.add("ftp://c.example").is_err());
+        assert!(relays.add("c.example").is_err());
+        assert_eq!(relays.urls().len(), 2, "非法地址不该进列表");
+
+        // 删掉选中项之前的一条，选中项要跟着往前挪
+        relays.select(1);
+        assert!(relays.remove(0));
+        assert_eq!(relays.urls(), ["https://b.example"]);
+        assert_eq!(relays.selected(), 0);
+
+        assert!(!relays.remove(5), "越界删除返回 false");
+
+        // 删到空就退回默认中继
+        assert!(relays.remove(0));
+        assert_eq!(relays, Relays::default());
+    }
+
+    #[test]
+    fn 删掉别的条目不会改变选中项() {
+        let mut relays = Relays::from_urls([
+            "https://a.example".to_string(),
+            "https://b.example".to_string(),
+            "https://c.example".to_string(),
+        ]);
+        relays.select(2);
+        assert!(relays.remove(0));
+        assert_eq!(relays.selected_url(), "https://c.example");
+    }
+
+    #[test]
+    fn 中继地址里的分号不会破坏格式() {
+        let mut relays = Relays::default();
+        relays.add("https://a.example/x;y").unwrap();
+        let prefs = Preferences {
+            relays: relays.clone(),
+            ..Preferences::default()
+        };
+        let text = prefs.serialize();
+        assert_eq!(Preferences::parse(&text).relays.urls(), relays.urls());
+    }
+
+    #[test]
+    fn 选中接口拒绝越界下标() {
+        let mut relays = Relays::default();
+        relays.select(99);
+        assert_eq!(relays.selected(), 0);
     }
 }

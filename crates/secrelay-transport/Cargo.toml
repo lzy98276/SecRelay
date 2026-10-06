@@ -10,6 +10,12 @@ repository.workspace = true
 [dependencies]
 secrelay-protocol.workspace = true
 async-trait.workspace = true
+bytes = "1"
+serde = { workspace = true }
 tokio = { workspace = true }
 thiserror.workspace = true
 tracing.workspace = true
+webrtc = "0.21"
+
+[dev-dependencies]
+serde_json.workspace = true
