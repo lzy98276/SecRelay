@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>SecRelay 概念稿 C：只看不控</title>
+  <defs>
+    <linearGradient id="c-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e2128"/>
+      <stop offset="1" stop-color="#0f1014"/>
+    </linearGradient>
+    <linearGradient id="c-accent" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5cf0a2"/>
+      <stop offset="1" stop-color="#2fc974"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="60" fill="url(#c-bg)" stroke="#2b2f38" stroke-width="2"/>
+
+  <!-- 眼 -->
+  <path d="M44,128 C80,56 176,56 212,128 C176,200 80,200 44,128 Z"
+        fill="none" stroke="#f2f4f8" stroke-width="13" stroke-linejoin="round"/>
+
+  <!-- 锁孔瞳孔 -->
+  <circle cx="128" cy="117" r="20" fill="url(#c-accent)"/>
+  <path d="M116,132 L140,132 L128,166 Z" fill="url(#c-accent)"/>
+</svg>

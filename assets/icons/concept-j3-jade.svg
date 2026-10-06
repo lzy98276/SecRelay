@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>SecRelay 图标 · 完全照搬 SecRandom 配色（对照用，强调色即它原本的墨绿）</title>
+  <defs>
+    <filter id="j3-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="5" stdDeviation="6" flood-color="#0B4A8C" flood-opacity="0.20"/>
+    </filter>
+    <filter id="j3-arrow-sh" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0B4A8C" flood-opacity="0.26"/>
+    </filter>
+    <filter id="j3-halo" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="7"/>
+    </filter>
+    <radialGradient id="j3-glow">
+      <stop offset="0" stop-color="#36AA75" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#36AA75" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="256" height="256" fill="#FFFFFF"/>
+  <ellipse cx="172" cy="176" rx="86" ry="74" fill="url(#j3-glow)"/>
+
+  <g filter="url(#j3-shadow)">
+    <rect x="118" y="56" width="70" height="72" rx="24" fill="#127AD2"/>
+    <rect x="66" y="52" width="70" height="70" rx="23" fill="#78BAE6"/>
+    <rect x="34" y="134" width="192" height="64" rx="32" fill="#127AD2"/>
+  </g>
+
+  <path d="M216,144 L206.2,174.7 L200.3,166.6 L154.3,200 L160.2,208.1 L128,208 L137.8,177.3 L143.7,185.4 L189.7,152 L183.8,143.9 Z"
+        fill="#FFFFFF" filter="url(#j3-halo)"/>
+  <path d="M216,144 L206.2,174.7 L200.3,166.6 L154.3,200 L160.2,208.1 L128,208 L137.8,177.3 L143.7,185.4 L189.7,152 L183.8,143.9 Z"
+        fill="#36AA75" filter="url(#j3-arrow-sh)"/>
+</svg>

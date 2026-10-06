@@ -1,299 +1,728 @@
-// SecRelay 主窗口。
+// SecRelay 主窗口 —— 导航式布局。
 //
-// 设计约定（很重要）：
-//   **这个文件里不允许出现任何面向用户的中文字面量。**
-//   所有文案都通过属性从 Rust 侧注入，而 Rust 侧的值来自 secrelay-i18n。
-//   这样做的好处是：加一门语言只改 i18n crate，不用碰 .slint 文件。
+// 结构约定：
+//   左侧是**导航栏**：顶部分组的功能页面入口，底部单独一个「设置」。
+//   右侧是**当前页面**：一次只显示一个页面，不把功能堆在一起。
+//   日志**不出现在界面上** —— 写文件，设置页里给个入口。用户视角应该感觉不到它的存在。
 //
-// 命名约定：`*-label` 是字段标签，`*-text` 是动态值，其余是静态文案。
+// 文案约定：这个文件里**不允许出现任何面向用户的字面量**。
+//   所有文案来自 `Strings` 全局，由 Rust 从 secrelay-i18n 注入。
+//
+// 布局约定：不给 HorizontalLayout 设 alignment（它会把主轴也居中）。
+//   需要垂直居中的小元素用 `VerticalLayout { alignment: center; ... }` 包起来。
 
 import { Button, LineEdit, ScrollView } from "std-widgets.slint";
 
-export component AppWindow inherits Window {
-    title: root.app-title;
-    width: 1060px;
-    height: 720px;
-    background: #15161a;
-    default-font-family: "Microsoft YaHei";
+// ───────────────────────────────────────────── 设计令牌
+//
+// Theme.bg 必须与 Rust 侧 secrelay_theme::DARK_BASE 保持一致：
+// 强调色的"柔和底色"要在 Rust 里按这个基底混合，两边不一致会显得脏。
+//
+// accent / accent-soft 是 in-out：由 Rust 从系统强调色注入（见 secrelay-theme）。
+export global Theme {
+    out property <color> bg: #15161a;
+    out property <color> nav: #101116;
+    out property <color> surface: #1b1c21;
+    out property <color> surface-hi: #262a31;
+    out property <color> stage: #0b0c10;
+    out property <color> border: #24262d;
+    out property <color> text: #e6e9ef;
+    out property <color> text-dim: #969ba5;
+    out property <color> text-faint: #5f646e;
+    out property <color> idle: #4a4e59;
+    out property <length> radius: 8px;
+    out property <length> pad: 22px;
+    out property <length> nav-width: 200px;
 
-    // ── 静态文案（由 Rust 从 i18n 注入）
+    // 强调色：默认值只是兜底，实际由 Rust 按系统主题覆盖。
+    // 兜底值 = Windows 出厂默认强调色（Fluent 蓝），与 Rust 侧 FALLBACK_ACCENT 一致。
+    in-out property <color> accent: #0078d4;
+    in-out property <color> accent-soft: #102c43;
+}
+
+// ───────────────────────────────────────────── 文案（由 Rust 注入）
+// 必须是 export global，否则 slint::include_modules!() 不会生成 Rust 侧的绑定。
+export global Strings {
     in property <string> app-title: "SecRelay";
     in property <string> tagline: "";
+
+    in property <string> group-connect: "";
+    in property <string> group-see: "";
+    in property <string> group-transfer: "";
+    in property <string> group-talk: "";
+    in property <string> group-system: "";
+
     in property <string> nav-devices: "";
-    in property <string> nav-session: "";
+    in property <string> nav-screen: "";
+    in property <string> nav-camera: "";
+    in property <string> nav-files: "";
+    in property <string> nav-messages: "";
     in property <string> nav-settings: "";
+
     in property <string> devices-title: "";
     in property <string> devices-empty: "";
     in property <string> devices-hint: "";
-    in property <string> session-title: "";
-    in property <string> peer-label: "";
-    in property <string> channels-label: "";
-    in property <string> capabilities-label: "";
-    in property <string> log-title: "";
-    in property <string> connect-label: "";
-    in property <string> disconnect-label: "";
-    in property <string> send-label: "";
-    in property <string> message-placeholder: "";
-    in property <string> settings-title: "";
-    in property <string> language-label: "";
-    in property <string> language-name: "";
-    in property <string> language-hint: "";
+    in property <string> session-peer: "";
+    in property <string> session-channels: "";
+    in property <string> session-capabilities: "";
+    in property <string> session-none: "";
 
-    // ── 动态值（由 Rust 在会话过程中更新）
+    in property <string> action-connect: "";
+    in property <string> action-disconnect: "";
+    in property <string> action-send: "";
+    in property <string> action-preview-start: "";
+    in property <string> action-preview-stop: "";
+    in property <string> action-open-log-dir: "";
+
+    in property <string> message-placeholder: "";
+    in property <string> messages-empty: "";
+
+    in property <string> preview-title: "";
+    in property <string> preview-empty: "";
+    in property <string> preview-empty-hint: "";
+    in property <string> preview-disclaimer: "";
+
+    in property <string> settings-title: "";
+    in property <string> settings-language: "";
+    in property <string> settings-language-hint: "";
+    in property <string> settings-diagnostics: "";
+    in property <string> settings-log-dir-hint: "";
+
+    in property <string> not-available-title: "";
+    in property <string> not-available-hint: "";
+}
+
+// ───────────────────────────────────────────── 会话消息
+export struct ChatMessage {
+    text: string,
+    outgoing: bool,
+}
+
+// ───────────────────────────────────────────── 基础组件
+component NavItem inherits Rectangle {
+    in property <string> label: "";
+    in property <bool> active: false;
+    callback clicked();
+
+    height: 32px;
+    border-radius: 6px;
+    background: root.active ? Theme.surface-hi : (ta.has-hover ? Theme.surface : transparent);
+
+    ta := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 11px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        // 选中指示条
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 3px;
+                height: 14px;
+                border-radius: 2px;
+                background: root.active ? Theme.accent : transparent;
+            }
+        }
+        Text {
+            text: root.label;
+            color: root.active ? Theme.text : Theme.text-dim;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+component NavGroupLabel inherits Rectangle {
+    in property <string> text: "";
+    height: 24px;
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: 12px;
+        Text {
+            text: root.text;
+            color: Theme.text-faint;
+            font-size: 10px;
+            font-weight: 600;
+            vertical-alignment: bottom;
+        }
+    }
+}
+
+component PageTitle inherits Text {
+    color: Theme.text;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+component Card inherits Rectangle {
+    background: Theme.surface;
+    border-radius: Theme.radius;
+}
+
+/** 「该功能尚未实现」占位页。位置留好，等实现接上即可。 */
+component PlaceholderPage inherits VerticalLayout {
+    padding: Theme.pad;
+    spacing: 10px;
+    alignment: center;
+
+    Rectangle {
+        width: 44px;
+        height: 44px;
+        border-radius: 22px;
+        background: Theme.surface;
+        Text {
+            text: "·";
+            color: Theme.text-faint;
+            font-size: 24px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+    Text {
+        text: Strings.not-available-title;
+        color: Theme.text-dim;
+        font-size: 14px;
+        horizontal-alignment: center;
+    }
+    Text {
+        text: Strings.not-available-hint;
+        color: Theme.text-faint;
+        font-size: 12px;
+        horizontal-alignment: center;
+    }
+}
+
+// ───────────────────────────────────────────── 页面：设备
+component DevicesPage inherits VerticalLayout {
+    in property <bool> connected: false;
     in property <string> state-text: "";
     in property <string> peer-text: "";
     in property <string> channels-text: "";
     in property <string> capabilities-text: "";
-    in property <string> log-text: "";
-    in property <bool> connected: false;
+    callback toggle-connect();
 
-    // ── 输入（双向绑定到 Rust）
-    in-out property <string> message-input: "";
+    padding: Theme.pad;
+    spacing: 14px;
 
-    // ── 事件
-    callback connect-clicked();
-    callback send-clicked(string);
+    PageTitle { text: Strings.devices-title; }
 
-    VerticalLayout {
-        // ═══ 顶栏
+    // 连接条
+    Card {
+        height: 60px;
         HorizontalLayout {
-            height: 68px;
-            padding-left: 20px;
-            padding-right: 20px;
-            padding-top: 14px;
-            padding-bottom: 14px;
-            spacing: 14px;
-            alignment: center;
+            padding-left: 16px;
+            padding-right: 16px;
+            spacing: 12px;
 
-            Text {
-                text: root.app-title;
-                color: #f2f4f8;
-                font-size: 21px;
-                font-weight: 600;
-                vertical-alignment: center;
-                width: 130px;
-            }
-            Text {
-                text: root.tagline;
-                color: #7d828f;
-                font-size: 13px;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-            // 状态指示灯 + 状态文本
-            Rectangle {
-                width: 9px;
-                height: 9px;
-                border-radius: 5px;
-                background: root.connected ? #3ddc84 : #4a4e59;
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: root.connected ? Theme.accent : Theme.idle;
+                }
             }
             Text {
                 text: root.state-text;
-                color: root.connected ? #3ddc84 : #9aa0ab;
+                color: root.connected ? Theme.accent : Theme.text-dim;
                 font-size: 13px;
                 vertical-alignment: center;
+                width: 72px;
+            }
+            Text {
+                text: root.peer-text;
+                color: Theme.text-faint;
+                font-size: 12px;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: root.connected ? Strings.action-disconnect : Strings.action-connect;
+                clicked => {
+                    root.toggle-connect();
+                }
             }
         }
+    }
 
-        Rectangle { height: 1px; background: #26282f; }
-
-        // ═══ 主体
-        HorizontalLayout {
-            vertical-stretch: 1;
-
-            // ── 左：设备列表
-            VerticalLayout {
-                width: 280px;
-                padding: 18px;
-                spacing: 12px;
-
+    // 会话信息
+    Card {
+        height: 92px;
+        VerticalLayout {
+            padding: 14px;
+            spacing: 8px;
+            HorizontalLayout {
+                spacing: 10px;
                 Text {
-                    text: root.devices-title;
-                    color: #e6e9ef;
-                    font-size: 14px;
-                    font-weight: 600;
-                }
-
-                Rectangle {
-                    vertical-stretch: 1;
-                    background: #1b1c21;
-                    border-radius: 8px;
-
-                    VerticalLayout {
-                        padding: 18px;
-                        spacing: 10px;
-                        alignment: center;
-
-                        Text {
-                            text: root.devices-empty;
-                            color: #b6bac4;
-                            font-size: 13px;
-                            horizontal-alignment: center;
-                        }
-                        Text {
-                            text: root.devices-hint;
-                            color: #676c78;
-                            font-size: 12px;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
-
-                // 语言（设置项，先放在这里，将来挪到设置页）
-                Rectangle {
-                    height: 1px;
-                    background: #26282f;
+                    text: Strings.session-peer;
+                    color: Theme.text-faint;
+                    font-size: 12px;
+                    width: 76px;
                 }
                 Text {
-                    text: root.language-label;
-                    color: #e6e9ef;
-                    font-size: 13px;
+                    text: root.peer-text;
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    horizontal-stretch: 1;
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: Strings.session-channels;
+                    color: Theme.text-faint;
+                    font-size: 12px;
+                    width: 76px;
                 }
                 Text {
-                    text: root.language-name;
-                    color: #3ddc84;
-                    font-size: 13px;
+                    text: root.channels-text;
+                    color: Theme.text-dim;
+                    font-size: 12px;
+                    horizontal-stretch: 1;
+                }
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                Text {
+                    text: Strings.session-capabilities;
+                    color: Theme.text-faint;
+                    font-size: 12px;
+                    width: 76px;
                 }
                 Text {
-                    text: root.language-hint;
-                    color: #676c78;
-                    font-size: 11px;
+                    text: root.capabilities-text;
+                    color: Theme.text-faint;
+                    font-size: 12px;
+                    horizontal-stretch: 1;
                     wrap: word-wrap;
                 }
             }
+        }
+    }
 
-            Rectangle { width: 1px; background: #26282f; }
+    // 设备列表
+    Card {
+        vertical-stretch: 1;
+        VerticalLayout {
+            padding: 18px;
+            spacing: 10px;
+            alignment: center;
+            Text {
+                text: Strings.devices-empty;
+                color: Theme.text-dim;
+                font-size: 13px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: Strings.devices-hint;
+                color: Theme.text-faint;
+                font-size: 11px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
 
-            // ── 右：会话
+// ───────────────────────────────────────────── 页面：远程桌面（画面）
+component ScreenPage inherits VerticalLayout {
+    in property <image> preview;
+    in property <bool> previewing: false;
+    in property <string> preview-stats: "";
+    callback toggle-preview();
+
+    padding: Theme.pad;
+    spacing: 14px;
+
+    HorizontalLayout {
+        spacing: 12px;
+        PageTitle { text: Strings.preview-title; }
+        Text {
+            text: root.preview-stats;
+            color: Theme.text-faint;
+            font-size: 11px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+    }
+
+    // 画面舞台
+    Rectangle {
+        vertical-stretch: 1;
+        background: Theme.stage;
+        border-radius: Theme.radius;
+        border-width: 1px;
+        border-color: Theme.border;
+
+        if root.previewing : Image {
+            source: root.preview;
+            image-fit: contain;
+        }
+
+        if !root.previewing : VerticalLayout {
+            padding: 24px;
+            spacing: 10px;
+            alignment: center;
+            Text {
+                text: Strings.preview-empty;
+                color: Theme.text-dim;
+                font-size: 14px;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: Strings.preview-empty-hint;
+                color: Theme.text-faint;
+                font-size: 11px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        Button {
+            text: root.previewing ? Strings.action-preview-stop : Strings.action-preview-start;
+            clicked => {
+                root.toggle-preview();
+            }
+        }
+        Text {
+            text: Strings.preview-disclaimer;
+            color: Theme.text-faint;
+            font-size: 10px;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+    }
+}
+
+// ───────────────────────────────────────────── 页面：消息
+component MessagesPage inherits VerticalLayout {
+    in property <[ChatMessage]> messages: [];
+    in-out property <string> draft: "";
+    in property <bool> connected: false;
+    callback submit(string);
+
+    padding: Theme.pad;
+    spacing: 14px;
+
+    PageTitle { text: Strings.nav-messages; }
+
+    Rectangle {
+        vertical-stretch: 1;
+        background: Theme.surface;
+        border-radius: Theme.radius;
+
+        if root.messages.length == 0 : Text {
+            text: Strings.messages-empty;
+            color: Theme.text-faint;
+            font-size: 12px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        ScrollView {
             VerticalLayout {
-                padding: 18px;
-                spacing: 14px;
+                padding: 14px;
+                spacing: 8px;
+                // 关键：不加这个，VerticalLayout 会把 ScrollView 的多余高度分给每条消息，
+                // 单行文字也会被撑成一大块。start 让子元素取自身高度、自上而下排。
+                alignment: start;
 
-                Text {
-                    text: root.session-title;
-                    color: #e6e9ef;
-                    font-size: 14px;
-                    font-weight: 600;
-                }
-
-                // 会话信息卡
-                Rectangle {
-                    background: #1b1c21;
-                    border-radius: 8px;
-                    height: 132px;
-
-                    VerticalLayout {
-                        padding: 14px;
-                        spacing: 9px;
-
+                for message in root.messages : HorizontalLayout {
+                    alignment: message.outgoing ? end : start;
+                    // 不拉伸：否则气泡会被撑满整个视口高度，单行文字也占一大块
+                    vertical-stretch: 0;
+                    Rectangle {
+                        vertical-stretch: 0;
+                        background: message.outgoing ? Theme.accent-soft : Theme.surface-hi;
+                        border-radius: 10px;
+                        max-width: min(root.width * 0.62, 420px);
                         HorizontalLayout {
-                            spacing: 10px;
+                            padding: 10px;
                             Text {
-                                text: root.peer-label;
-                                color: #7d828f;
-                                font-size: 12px;
-                                width: 96px;
-                            }
-                            Text {
-                                text: root.peer-text;
-                                color: #d8dbe3;
-                                font-size: 12px;
-                                horizontal-stretch: 1;
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text {
-                                text: root.channels-label;
-                                color: #7d828f;
-                                font-size: 12px;
-                                width: 96px;
-                            }
-                            Text {
-                                text: root.channels-text;
-                                color: #d8dbe3;
-                                font-size: 12px;
-                                horizontal-stretch: 1;
-                            }
-                        }
-                        HorizontalLayout {
-                            spacing: 10px;
-                            Text {
-                                text: root.capabilities-label;
-                                color: #7d828f;
-                                font-size: 12px;
-                                width: 96px;
-                            }
-                            Text {
-                                text: root.capabilities-text;
-                                color: #d8dbe3;
-                                font-size: 12px;
-                                horizontal-stretch: 1;
+                                text: message.text;
+                                color: Theme.text;
+                                font-size: 13px;
                                 wrap: word-wrap;
                             }
                         }
                     }
                 }
+            }
+        }
+    }
 
-                // 消息输入行
-                HorizontalLayout {
-                    spacing: 10px;
-                    height: 38px;
+    HorizontalLayout {
+        spacing: 10px;
+        height: 36px;
+        LineEdit {
+            placeholder-text: Strings.message-placeholder;
+            text <=> root.draft;
+            horizontal-stretch: 1;
+            enabled: root.connected;
+            accepted => {
+                root.submit(root.draft);
+            }
+        }
+        Button {
+            text: Strings.action-send;
+            enabled: root.connected;
+            clicked => {
+                root.submit(root.draft);
+            }
+        }
+    }
+}
 
-                    LineEdit {
-                        placeholder-text: root.message-placeholder;
-                        text <=> root.message-input;
-                        horizontal-stretch: 1;
-                        enabled: root.connected;
-                        accepted => {
-                            root.send-clicked(root.message-input);
-                        }
+// ───────────────────────────────────────────── 页面：设置
+component SettingsPage inherits VerticalLayout {
+    in property <string> language-name: "";
+    in property <string> log-dir: "";
+    callback open-log-dir();
+
+    padding: Theme.pad;
+    spacing: 14px;
+
+    PageTitle { text: Strings.settings-title; }
+
+    Card {
+        height: 96px;
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            Text {
+                text: Strings.settings-language;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            Text {
+                text: root.language-name;
+                color: Theme.accent;
+                font-size: 13px;
+            }
+            Text {
+                text: Strings.settings-language-hint;
+                color: Theme.text-faint;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    // 诊断：日志不进界面，只给一个入口
+    Card {
+        height: 118px;
+        VerticalLayout {
+            padding: 16px;
+            spacing: 8px;
+            Text {
+                text: Strings.settings-diagnostics;
+                color: Theme.text;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            Text {
+                text: Strings.settings-log-dir-hint;
+                color: Theme.text-faint;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.log-dir;
+                color: Theme.text-dim;
+                font-size: 10px;
+                wrap: word-wrap;
+            }
+            HorizontalLayout {
+                height: 30px;
+                alignment: start;
+                Button {
+                    text: Strings.action-open-log-dir;
+                    clicked => {
+                        root.open-log-dir();
                     }
-                    Button {
-                        text: root.send-label;
-                        enabled: root.connected;
-                        clicked => {
-                            root.send-clicked(root.message-input);
-                        }
+                }
+            }
+        }
+    }
+
+    Rectangle { vertical-stretch: 1; background: transparent; }
+}
+
+// ───────────────────────────────────────────── 主窗口
+export component AppWindow inherits Window {
+    title: Strings.app-title;
+    width: 1140px;
+    height: 760px;
+    background: Theme.bg;
+    default-font-family: "Microsoft YaHei";
+
+    // 当前页面：0 设备 / 1 远程桌面 / 2 摄像头 / 3 文件 / 4 消息 / 5 设置
+    in-out property <int> current-page: 0;
+
+    // 动态状态
+    in property <bool> connected: false;
+    in property <string> state-text: "";
+    in property <string> peer-text: "";
+    in property <string> channels-text: "";
+    in property <string> capabilities-text: "";
+    in property <image> preview;
+    in property <bool> previewing: false;
+    in property <string> preview-stats: "";
+    in property <[ChatMessage]> messages: [];
+    in-out property <string> message-input: "";
+    in property <string> language-name: "";
+    in property <string> log-dir: "";
+
+    callback connect-clicked();
+    callback send-clicked(string);
+    callback preview-toggle-clicked();
+    callback open-log-dir-clicked();
+
+    HorizontalLayout {
+        // ══ 左：导航栏
+        Rectangle {
+            width: Theme.nav-width;
+            background: Theme.nav;
+            VerticalLayout {
+                padding: 14px;
+                spacing: 4px;
+
+                // 品牌
+                VerticalLayout {
+                    spacing: 2px;
+                    height: 52px;
+                    Text {
+                        text: Strings.app-title;
+                        color: Theme.text;
+                        font-size: 17px;
+                        font-weight: 600;
+                    }
+                    Text {
+                        text: Strings.tagline;
+                        color: Theme.text-faint;
+                        font-size: 9px;
+                        wrap: word-wrap;
                     }
                 }
 
-                // 连接 / 断开
-                HorizontalLayout {
-                    height: 40px;
-                    alignment: start;
-                    Button {
-                        text: root.connected ? root.disconnect-label : root.connect-label;
-                        clicked => {
-                            root.connect-clicked();
-                        }
+                // ── 功能页面，按「看 / 传 / 说」分类
+                NavGroupLabel { text: Strings.group-connect; }
+                NavItem {
+                    label: Strings.nav-devices;
+                    active: root.current-page == 0;
+                    clicked => {
+                        root.current-page = 0;
                     }
                 }
 
-                // 日志
-                Text {
-                    text: root.log-title;
-                    color: #e6e9ef;
-                    font-size: 14px;
-                    font-weight: 600;
-                }
-                Rectangle {
-                    vertical-stretch: 1;
-                    background: #0f1014;
-                    border-radius: 8px;
-
-                    ScrollView {
-                        VerticalLayout {
-                            padding: 12px;
-                            Text {
-                                text: root.log-text;
-                                color: #8f95a1;
-                                font-size: 12px;
-                                wrap: word-wrap;
-                            }
-                        }
+                NavGroupLabel { text: Strings.group-see; }
+                NavItem {
+                    label: Strings.nav-screen;
+                    active: root.current-page == 1;
+                    clicked => {
+                        root.current-page = 1;
                     }
+                }
+                NavItem {
+                    label: Strings.nav-camera;
+                    active: root.current-page == 2;
+                    clicked => {
+                        root.current-page = 2;
+                    }
+                }
+
+                NavGroupLabel { text: Strings.group-transfer; }
+                NavItem {
+                    label: Strings.nav-files;
+                    active: root.current-page == 3;
+                    clicked => {
+                        root.current-page = 3;
+                    }
+                }
+
+                NavGroupLabel { text: Strings.group-talk; }
+                NavItem {
+                    label: Strings.nav-messages;
+                    active: root.current-page == 4;
+                    clicked => {
+                        root.current-page = 4;
+                    }
+                }
+
+                // ── 撑开，把设置推到底部
+                Rectangle { vertical-stretch: 1; background: transparent; }
+
+                Rectangle { height: 1px; background: Theme.border; }
+
+                NavGroupLabel { text: Strings.group-system; }
+                NavItem {
+                    label: Strings.nav-settings;
+                    active: root.current-page == 5;
+                    clicked => {
+                        root.current-page = 5;
+                    }
+                }
+            }
+        }
+
+        Rectangle { width: 1px; background: Theme.border; }
+
+        // ══ 右：当前页面
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.bg;
+
+            if root.current-page == 0 : DevicesPage {
+                connected: root.connected;
+                state-text: root.state-text;
+                peer-text: root.peer-text;
+                channels-text: root.channels-text;
+                capabilities-text: root.capabilities-text;
+                toggle-connect => {
+                    root.connect-clicked();
+                }
+            }
+
+            if root.current-page == 1 : ScreenPage {
+                preview: root.preview;
+                previewing: root.previewing;
+                preview-stats: root.preview-stats;
+                toggle-preview => {
+                    root.preview-toggle-clicked();
+                }
+            }
+
+            if root.current-page == 2 : PlaceholderPage { }
+            if root.current-page == 3 : PlaceholderPage { }
+
+            if root.current-page == 4 : MessagesPage {
+                messages: root.messages;
+                draft <=> root.message-input;
+                connected: root.connected;
+                submit(text) => {
+                    root.send-clicked(text);
+                }
+            }
+
+            if root.current-page == 5 : SettingsPage {
+                language-name: root.language-name;
+                log-dir: root.log-dir;
+                open-log-dir => {
+                    root.open-log-dir-clicked();
                 }
             }
         }

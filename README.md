@@ -9,9 +9,10 @@
 ## 快速开始
 
 ```bash
-cargo test --workspace                    # 64 个测试
+cargo test --workspace                    # 90 个测试
 cargo run -p secrelay-desktop             # 打开桌面客户端
 cargo run -p secrelay-desktop -- --demo   # 自动演示：自动连接并发两条消息
+cargo run -p secrelay-desktop -- --demo --preview --page 1   # 含本机画面采集预览
 
 cargo run -p secrelay-cli -- selftest     # 协议与会话模型自检
 # 屏幕采集探针（Windows 真实抓屏；其它平台加 --synthetic）
@@ -30,13 +31,31 @@ cargo run -p secrelay-cli -- help
 
 ## 界面
 
-![SecRelay 桌面客户端](docs/app-window.png)
+左侧是**导航栏**，按「看 / 传 / 说」分组；最底部单独一行是**系统 → 设置**。
+右侧一次只显示**一个页面**，不把功能堆在一起。
 
-`--demo` 模式自动跑完整闭环：握手 → 协商出 `媒体 / 文件 / 控制` 三个频道 → 双向文字消息。
-注意日志第一行明确写着 *M0 演示：使用进程内回环连接，真实 P2P 尚未接入* —— 界面不会假装连通性已经跑通。
+| 设备 | 远程桌面 |
+|---|---|
+| ![设备页](docs/ui-devices.png) | ![远程桌面页](docs/ui-screen.png) |
 
-**界面里没有面向用户的字面量。** `ui/app.slint` 的每一条文案都由 Rust 从 `secrelay-i18n` 注入，
-所以加一门语言只需要动 i18n crate。
+| 消息 | 设置 |
+|---|---|
+| ![消息页](docs/ui-messages.png) | ![设置页](docs/ui-settings.png) |
+
+三条界面约定：
+
+1. **日志不出现在界面上。** 诊断信息写进 `%LOCALAPPDATA%\SecRelay\logs`（按天滚动），
+   界面只在设置页提供"打开日志目录"的入口。用户视角不应该感觉到日志的存在。
+2. **消息不是日志。** 会话消息有自己的列表模型（左右分栏气泡），与内部事件彻底分开 ——
+   否则用户会在"发消息"的地方看到一堆内部事件。
+3. **界面里没有面向用户的字面量。** `ui/app.slint` 的每一条文案都由 Rust 从 `secrelay-i18n`
+   注入到 `Strings` 全局，所以加一门语言只需要动 i18n crate。
+
+`--demo` 会自动跑完整闭环（握手 → 协商三频道 → 双向文字消息）；
+`--preview` 会启动本机画面采集；`--page N` 可直接打开指定页面，方便截图与演示。
+
+> **远程桌面页当前显示的是本机采集回显，不是远程画面。** 页面上有明确文案说明这一点 ——
+> 界面不假装连通性已经跑通。真实的远程画面要等编码与 P2P 就位。
 
 ## 核心设计：一条通道 + N 种频道
 
@@ -64,11 +83,12 @@ crates/
   secrelay-protocol/    线格式、频道模型、控制消息（纯逻辑，可编译到 WASM）
   secrelay-transport/   连接抽象：ICE 直连 / 中继 / QUIC 文件通道收敛到一个 trait
   secrelay-session/     会话编排：握手、能力协商、频道管理、事件流
-  secrelay-media/       媒体层：frame / capture / synthetic / backend 四类模块 + PNG 编码器
+  secrelay-media/       媒体层：frame / capture / synthetic / convert / backend + PNG 编码器
   secrelay-i18n/        国际化：类型安全文案目录（当前仅简体中文）
+  secrelay-theme/       主题色：读取系统强调色（Windows 注册表 / macOS defaults / GNOME·KDE·GTK）
 apps/
   secrelay-cli/         命令行工具、M0 自检与采集探针
-  secrelay-desktop/     桌面客户端（Slint UI + i18n）
+  secrelay-desktop/     桌面客户端（Slint UI：左侧导航 + 分页面 + i18n）
 docs/
   需求分析.md            主文档：需求、平台矩阵、选型、风险、决策点
   measurements.md       M0 探针实测记录（可复现的性能数字）
@@ -93,8 +113,10 @@ docs/
 - 合成画面源（无显示器环境下可测试，且变化区域可控）
 - 帧差分度量（脏矩形差分的依据：实测相邻帧 0.02%~0.54% 变化，峰值 31%）
 - 自写 PNG 编码器（零依赖截图，用于文档配图与缺陷复现）
-- **桌面客户端**（Slint UI：设备列表、会话状态、频道展示、文字消息、日志）
-- **类型安全 i18n**（45 条文案 × 简体中文；新增语言漏翻会编译失败）
+- **桌面客户端**（Slint UI：**左侧导航分组 + 分页面**，中文 i18n，日志写文件不进界面）
+- **类型安全 i18n**（68 条文案 × 简体中文；新增语言漏翻会编译失败）
+- **跟随系统强调色**（Windows 注册表 / macOS / GNOME·KDE·GTK；取不到则回退 Windows 出厂默认蓝 `#0078D4`）
+- 本机画面预览（采集 → 像素转换 → 界面显示；实测 CPU 拷贝路径约 1 个核心，见 measurements）
 
 **未实现（下一步）**
 - 真实的 ICE 打洞 / 中继兜底 / 第二条 QUIC 文件通道（D24 未定）

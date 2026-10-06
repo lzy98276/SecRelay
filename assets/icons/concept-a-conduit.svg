@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>SecRelay 概念稿 A：对流通道</title>
+  <defs>
+    <linearGradient id="a-bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e2128"/>
+      <stop offset="1" stop-color="#0f1014"/>
+    </linearGradient>
+    <linearGradient id="a-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5cf0a2"/>
+      <stop offset="1" stop-color="#2fc974"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="8" y="8" width="240" height="240" rx="60" fill="url(#a-bg)" stroke="#2b2f38" stroke-width="2"/>
+
+  <!-- 两端设备 -->
+  <rect x="30" y="115" width="30" height="30" rx="10" fill="#f2f4f8"/>
+  <rect x="196" y="115" width="30" height="30" rx="10" fill="#f2f4f8"/>
+
+  <!-- 上行走廊：向右 -->
+  <path d="M72,110 H160" stroke="url(#a-accent)" stroke-width="17" stroke-linecap="round" fill="none"/>
+  <path d="M156,90 L196,110 L156,130 Z" fill="url(#a-accent)"/>
+
+  <!-- 下行走廊：向左 -->
+  <path d="M184,150 H96" stroke="url(#a-accent)" stroke-width="17" stroke-linecap="round" fill="none"/>
+  <path d="M100,130 L60,150 L100,170 Z" fill="url(#a-accent)"/>
+</svg>

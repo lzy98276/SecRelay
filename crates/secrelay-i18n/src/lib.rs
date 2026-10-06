@@ -82,9 +82,19 @@ pub enum Key {
 
     // ── 导航
     NavDevices,
-    NavSession,
+    NavScreen,
+    NavCamera,
+    NavFiles,
+    NavMessages,
     NavSettings,
     NavAbout,
+
+    /// 导航分组标题。
+    GroupConnect,
+    GroupSee,
+    GroupTransfer,
+    GroupTalk,
+    GroupSystem,
 
     // ── 设备列表
     DevicesTitle,
@@ -124,6 +134,14 @@ pub enum Key {
     SettingsTitle,
     SettingsLanguage,
     SettingsLanguageHint,
+    SettingsDiagnostics,
+    SettingsLogDirHint,
+    ActionOpenLogDir,
+
+    // ── 尚未实现的页面
+    NotAvailableTitle,
+    NotAvailableHint,
+    MessagesEmpty,
 
     // ── 日志与错误
     LogTitle,
@@ -134,6 +152,17 @@ pub enum Key {
     LogConnected,
     LogDisconnected,
     LogDemoMode,
+
+    // ── 画面预览
+    PreviewTitle,
+    PreviewEmpty,
+    PreviewEmptyHint,
+    ActionPreviewStart,
+    ActionPreviewStop,
+    PreviewDisclaimer,
+    StatsFps,
+    StatsChange,
+    StatsSize,
 
     ErrorGeneric,
     ErrorNotConnected,
@@ -149,9 +178,17 @@ impl Key {
         Key::AppName,
         Key::AppTagline,
         Key::NavDevices,
-        Key::NavSession,
+        Key::NavScreen,
+        Key::NavCamera,
+        Key::NavFiles,
+        Key::NavMessages,
         Key::NavSettings,
         Key::NavAbout,
+        Key::GroupConnect,
+        Key::GroupSee,
+        Key::GroupTransfer,
+        Key::GroupTalk,
+        Key::GroupSystem,
         Key::DevicesTitle,
         Key::DevicesEmpty,
         Key::DevicesEmptyHint,
@@ -179,6 +216,12 @@ impl Key {
         Key::SettingsTitle,
         Key::SettingsLanguage,
         Key::SettingsLanguageHint,
+        Key::SettingsDiagnostics,
+        Key::SettingsLogDirHint,
+        Key::ActionOpenLogDir,
+        Key::NotAvailableTitle,
+        Key::NotAvailableHint,
+        Key::MessagesEmpty,
         Key::LogTitle,
         Key::LogHandshakeStarted,
         Key::LogHandshakeDone,
@@ -190,6 +233,15 @@ impl Key {
         Key::ErrorGeneric,
         Key::ErrorNotConnected,
         Key::ErrorNotImplemented,
+        Key::PreviewTitle,
+        Key::PreviewEmpty,
+        Key::PreviewEmptyHint,
+        Key::ActionPreviewStart,
+        Key::ActionPreviewStop,
+        Key::PreviewDisclaimer,
+        Key::StatsFps,
+        Key::StatsChange,
+        Key::StatsSize,
         Key::DemoMessage,
     ];
 
@@ -208,9 +260,18 @@ impl Key {
             Key::AppTagline => "跨设备连接，让看、传、说归于一处",
 
             Key::NavDevices => "设备",
-            Key::NavSession => "会话",
+            Key::NavScreen => "远程桌面",
+            Key::NavCamera => "摄像头",
+            Key::NavFiles => "文件",
+            Key::NavMessages => "消息",
             Key::NavSettings => "设置",
             Key::NavAbout => "关于",
+
+            Key::GroupConnect => "连接",
+            Key::GroupSee => "看",
+            Key::GroupTransfer => "传",
+            Key::GroupTalk => "说",
+            Key::GroupSystem => "系统",
 
             Key::DevicesTitle => "设备列表",
             Key::DevicesEmpty => "还没有已配对的设备",
@@ -244,6 +305,13 @@ impl Key {
             Key::SettingsTitle => "设置",
             Key::SettingsLanguage => "界面语言",
             Key::SettingsLanguageHint => "目前仅提供简体中文，其它语言后续添加",
+            Key::SettingsDiagnostics => "诊断",
+            Key::SettingsLogDirHint => "日志写在文件里，不占用界面；需要排查问题时再打开",
+            Key::ActionOpenLogDir => "打开日志目录",
+
+            Key::NotAvailableTitle => "该功能尚未实现",
+            Key::NotAvailableHint => "页面位置已经留好，等功能接上即可",
+            Key::MessagesEmpty => "还没有消息",
 
             Key::LogTitle => "日志",
             Key::LogHandshakeStarted => "开始握手…",
@@ -253,6 +321,16 @@ impl Key {
             Key::LogConnected => "已连接",
             Key::LogDisconnected => "已断开连接",
             Key::LogDemoMode => "M0 演示：使用进程内回环连接，真实 P2P 尚未接入",
+
+            Key::PreviewTitle => "画面",
+            Key::PreviewEmpty => "尚未开始预览",
+            Key::PreviewEmptyHint => "点下面的按钮，把本机桌面采集到这里，用来验证视频通路",
+            Key::ActionPreviewStart => "开始本机预览",
+            Key::ActionPreviewStop => "停止预览",
+            Key::PreviewDisclaimer => "M0 探针：本机采集直接在界面回显，尚未经过编码与网络传输",
+            Key::StatsFps => "{fps} fps",
+            Key::StatsChange => "画面变化 {ratio}%",
+            Key::StatsSize => "{width}×{height}",
 
             Key::ErrorGeneric => "出错了：{detail}",
             Key::ErrorNotConnected => "尚未建立连接",
@@ -304,12 +382,15 @@ mod tests {
     #[test]
     fn 全部键都已登记在_all_里() {
         // 防止新增 Key 变体后忘记加进 ALL —— 那样上面的穷尽检查会漏掉它。
-        // 这里用 Debug 名字做交叉核对：ALL 的长度必须与枚举变体数一致。
-        // 变体数变化时这个断言会失败，提醒维护者同步 ALL。
+        // Rust 无法在不引宏的情况下枚举枚举变体，所以这里用一个数字做绊线：
+        // 变体数一变，这个测试就失败，提醒维护者同步 ALL。
+        const EXPECTED: usize = 68;
         assert_eq!(
             Key::ALL.len(),
-            45,
-            "Key 变体数量变了：请同时更新 Key::ALL 与本断言的数字"
+            EXPECTED,
+            "Key::ALL 里有 {} 条，但断言的期望值是 {EXPECTED}。\
+             加/删文案时请同时更新 Key::ALL 与这个数字。",
+            Key::ALL.len()
         );
     }
 

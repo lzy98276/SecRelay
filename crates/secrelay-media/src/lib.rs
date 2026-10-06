@@ -17,12 +17,14 @@
 
 pub mod backend;
 pub mod capture;
+pub mod convert;
 pub mod frame;
 pub mod png;
 pub mod synthetic;
 
 pub use backend::{native_backend_name, open_default_source, HAS_NATIVE_BACKEND};
 pub use capture::{CaptureError, ScreenSource};
+pub use convert::{scale_for_width, to_rgba_scaled, ConvertError, RgbaImage};
 pub use frame::{expected_len, PixelFormat, VideoFrame};
 pub use synthetic::SyntheticScreenSource;
 

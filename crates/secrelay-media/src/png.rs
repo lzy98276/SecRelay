@@ -1,15 +1,16 @@
 //! 极简 PNG 编码器。
 //!
-//! 为什么自己写而不是引依赖：我们只需要"把一帧 BGRA 存成 PNG"这一件事，
+//! 为什么自己写而不是引依赖：我们只需要"把一帧存成 PNG"这一件事，
 //! 而 PNG 的必要子集非常小 —— 签名、IHDR、IDAT、IEND，加上 **stored 模式的 deflate**
 //! （不压缩，直接分块存放）。用 `flate2`/`png` 之类会引入 zlib 的 C 依赖或成规模的纯 Rust 实现，
 //! 对"截图自证 / 文档配图 / 缺陷复现"这个用途不划算。
 //!
-//! 代价是**文件比压缩后大**（1080p 约 8MB）。所以提供了整数倍降采样：
-//! `scale=2` 时面积变成 1/4，用于文档配图足够。
+//! 代价是**文件比压缩后大**（1080p 约 8MB）。所以配合 [`crate::convert`] 的整数倍降采样使用。
 //!
-//! 这不是通用图像库，也不打算变成通用图像库。
+//! 像素转换与降采样统一由 [`crate::convert`] 提供，这里不再重复实现 ——
+//! 截图与 UI 预览必须走同一套像素逻辑，否则同一帧在两处会不一致。
 
+use crate::convert::{self, RgbaImage};
 use crate::frame::VideoFrame;
 
 /// PNG 文件签名。
@@ -20,57 +21,55 @@ const MAX_STORED_BLOCK: usize = 65_535;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PngError {
-    #[error("缩放倍数必须大于 0")]
-    BadScale,
+    #[error("像素转换失败：{0}")]
+    Convert(#[from] convert::ConvertError),
 
-    #[error("帧尺寸为 0，无法编码")]
-    EmptyFrame,
+    #[error("图像尺寸为 0，无法编码")]
+    EmptyImage,
 
-    #[error("帧缓冲区过大，无法编码为单个 PNG：{0} 字节")]
+    #[error("图像过大，无法编码为单个 PNG：{0} 字节")]
     TooLarge(usize),
 }
 
-/// 把一帧编码成 PNG（8 位真彩色，无 alpha）。
-///
-/// `scale` 是整数降采样倍数：1 表示原尺寸，2 表示宽高各取一半（面积 1/4）。
+/// 把一帧编码成 PNG。`scale` 是整数降采样倍数（见 [`crate::convert::to_rgba_scaled`]）。
 pub fn encode(frame: &VideoFrame, scale: u32) -> Result<Vec<u8>, PngError> {
-    if scale == 0 {
-        return Err(PngError::BadScale);
-    }
-    if frame.width == 0 || frame.height == 0 {
-        return Err(PngError::EmptyFrame);
-    }
+    let image = convert::to_rgba_scaled(frame, scale)?;
+    encode_rgba(&image)
+}
 
-    let (out_width, out_height) = (
-        frame.width.div_ceil(scale),
-        frame.height.div_ceil(scale),
-    );
+/// 把一张 RGBA 图像编码成 PNG（8 位真彩色，**无 alpha**）。
+pub fn encode_rgba(image: &RgbaImage) -> Result<Vec<u8>, PngError> {
+    if image.width == 0 || image.height == 0 {
+        return Err(PngError::EmptyImage);
+    }
+    if image.data.len() != image.width as usize * image.height as usize * 4 {
+        return Err(PngError::EmptyImage);
+    }
 
     // 每行 1 字节滤波器类型 + RGB 像素
-    let row_len = 1 + out_width as usize * 3;
-    let raw_len = row_len * out_height as usize;
+    let row_len = 1 + image.width as usize * 3;
+    let raw_len = row_len * image.height as usize;
     if raw_len > u32::MAX as usize {
         return Err(PngError::TooLarge(raw_len));
     }
 
     let mut raw = Vec::with_capacity(raw_len);
-    for out_y in 0..out_height {
+    for y in 0..image.height as usize {
         raw.push(0); // 滤波器类型：None
-        for out_x in 0..out_width {
-            let (r, g, b) = sample_rgb(frame, out_x * scale, out_y * scale, scale);
-            raw.push(r);
-            raw.push(g);
-            raw.push(b);
+        for x in 0..image.width as usize {
+            let offset = (y * image.width as usize + x) * 4;
+            raw.push(image.data[offset]); // R
+            raw.push(image.data[offset + 1]); // G
+            raw.push(image.data[offset + 2]); // B
         }
     }
 
     let mut png = Vec::with_capacity(raw_len + raw_len / 512 + 128);
     png.extend_from_slice(&SIGNATURE);
 
-    // IHDR
     let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&out_width.to_be_bytes());
-    ihdr.extend_from_slice(&out_height.to_be_bytes());
+    ihdr.extend_from_slice(&image.width.to_be_bytes());
+    ihdr.extend_from_slice(&image.height.to_be_bytes());
     ihdr.push(8); // 位深
     ihdr.push(2); // 颜色类型 2 = 真彩色 RGB
     ihdr.push(0); // 压缩方法
@@ -78,7 +77,6 @@ pub fn encode(frame: &VideoFrame, scale: u32) -> Result<Vec<u8>, PngError> {
     ihdr.push(0); // 非隔行
     write_chunk(&mut png, b"IHDR", &ihdr);
 
-    // IDAT：zlib 头 + stored deflate + adler32
     let mut zlib = Vec::with_capacity(raw_len + raw_len / 1024 + 64);
     zlib.push(0x78); // CMF: deflate, 32K 窗口
     zlib.push(0x01); // FLG: 使 (CMF<<8|FLG) % 31 == 0，无字典
@@ -88,50 +86,6 @@ pub fn encode(frame: &VideoFrame, scale: u32) -> Result<Vec<u8>, PngError> {
 
     write_chunk(&mut png, b"IEND", &[]);
     Ok(png)
-}
-
-/// 取一个输出像素对应的 RGB。`scale=1` 时就是直接取值；
-/// 大于 1 时对 `scale x scale` 块做平均（盒式滤波），避免最近邻的锯齿。
-fn sample_rgb(frame: &VideoFrame, base_x: u32, base_y: u32, scale: u32) -> (u8, u8, u8) {
-    if scale == 1 {
-        let (b, g, r) = pixel_bgr(frame, base_x, base_y);
-        return (r, g, b);
-    }
-
-    let mut sum = [0u32; 3];
-    let mut count = 0u32;
-    for dy in 0..scale {
-        for dx in 0..scale {
-            let x = base_x + dx;
-            let y = base_y + dy;
-            if x >= frame.width || y >= frame.height {
-                continue;
-            }
-            let (b, g, r) = pixel_bgr(frame, x, y);
-            sum[0] += u32::from(r);
-            sum[1] += u32::from(g);
-            sum[2] += u32::from(b);
-            count += 1;
-        }
-    }
-    if count == 0 {
-        return (0, 0, 0);
-    }
-    (
-        (sum[0] / count) as u8,
-        (sum[1] / count) as u8,
-        (sum[2] / count) as u8,
-    )
-}
-
-/// 读取 BGRA 像素，返回 `(b, g, r)`。越界返回 (0,0,0)。
-fn pixel_bgr(frame: &VideoFrame, x: u32, y: u32) -> (u8, u8, u8) {
-    let stride = frame.stride();
-    let offset = y as usize * stride + x as usize * 4;
-    match frame.data.get(offset..offset + 4) {
-        Some(px) => (px[0], px[1], px[2]),
-        None => (0, 0, 0),
-    }
 }
 
 /// 写入一个 PNG chunk：长度 + 类型 + 数据 + CRC32（CRC 覆盖类型与数据）。
@@ -291,12 +245,11 @@ mod tests {
     }
 
     #[test]
-    fn 颜色按_rgb_顺序写入而不是_bgra_顺序() {
-        // 一个纯红像素：BGRA 是 [0,0,255,255]，PNG 里应当是 FF 00 00
+    fn 颜色按_rgb_顺序写入() {
+        // 纯红像素在 PNG 里应当是 FF 00 00
         let frame = frame_from(1, 1, |_, _| (255, 0, 0));
         let png = encode(&frame, 1).unwrap();
 
-        // 找到 IDAT 数据区：zlib(2) + block header(5) 之后就是第一个像素
         let idat_start = png
             .windows(4)
             .position(|w| w == b"IDAT")
@@ -310,9 +263,31 @@ mod tests {
     }
 
     #[test]
-    fn 空帧与非法缩放被拒() {
+    fn 可以直接编码_rgba_图像() {
+        let image = RgbaImage {
+            width: 2,
+            height: 1,
+            data: vec![255, 0, 0, 255, 0, 255, 0, 255],
+        };
+        let png = encode_rgba(&image).unwrap();
+        let chunks = verify_structure(&png);
+        assert_eq!(chunks[0].0, "IHDR");
+    }
+
+    #[test]
+    fn 非法输入被拒() {
         let frame = frame_from(2, 2, |_, _| (0, 0, 0));
-        assert!(matches!(encode(&frame, 0), Err(PngError::BadScale)));
+        assert!(matches!(
+            encode(&frame, 0),
+            Err(PngError::Convert(convert::ConvertError::BadScale))
+        ));
+
+        let empty = RgbaImage {
+            width: 0,
+            height: 0,
+            data: vec![],
+        };
+        assert!(matches!(encode_rgba(&empty), Err(PngError::EmptyImage)));
     }
 
     #[test]

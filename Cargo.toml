@@ -16,6 +16,7 @@ secrelay-transport = { path = "crates/secrelay-transport" }
 secrelay-session = { path = "crates/secrelay-session" }
 secrelay-media = { path = "crates/secrelay-media" }
 secrelay-i18n = { path = "crates/secrelay-i18n" }
+secrelay-theme = { path = "crates/secrelay-theme" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

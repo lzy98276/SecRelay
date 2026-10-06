@@ -1,0 +1,10 @@
+[package]
+name = "secrelay-theme"
+description = "SecRelay 主题色：读取系统强调色（Windows / macOS / Linux），取不到则回退到内置默认色"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
