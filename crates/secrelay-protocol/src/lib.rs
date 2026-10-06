@@ -1,7 +1,7 @@
 //! SecRelay 线上协议。
 //!
 //! 设计依据是 `docs/需求分析.md` §3 的核心抽象：**一条加密通道 + N 种频道**。
-//! 屏幕、摄像头、投屏、文件、文字、语音全部是这条通道上的不同频道，
+//! 摄像头、文件、文字、语音全部是这条通道上的不同频道，
 //! 而不是各自一套连接逻辑。
 //!
 //! 本 crate 只定义**接口与线格式**：不做 I/O、不依赖 UI、不认识 WebRTC。
@@ -80,7 +80,7 @@ impl std::fmt::Display for DeviceId {
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum Channel {
-    /// ① 实时媒体：屏幕画面、摄像头、麦克风。低延迟优先，**允许丢帧**。
+    /// ① 实时媒体：摄像头、麦克风。低延迟优先，**允许丢帧**。
     Media = 0,
     /// ② 可靠字节流：文件、剪贴板大对象。必达、有序、可分块续传。
     File = 1,
@@ -377,7 +377,7 @@ mod tests {
         ControlMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
             device_id: DeviceId::new("dev-abc123").unwrap(),
-            capabilities: vec!["screen".into(), "camera".into()],
+            capabilities: vec!["camera".into()],
         }
     }
 

@@ -5,6 +5,11 @@
 > 目标平台：Windows 10/11、Ubuntu/Debian Linux（X11 + Wayland）、macOS 12.3+、Android 10~15、iOS 15+
 > 调研时间点：Apple 平台为 **macOS 26/27 世代、iOS/iPadOS 27**（WWDC26 之后）；Android 为 **API 36（Android 16）** 世代
 
+> ⚠️ **本阶段不做屏幕分享 / 远程看屏 / 投屏，依据留档。**
+> 本文里屏幕采集、被看端、投屏相关的矩阵与结论（DDA/WGC、ScreenCaptureKit、ReplayKit、
+> MediaProjection、portal+PipeWire 等）只作为技术储备保留，**不代表当前需求**；
+> 其中摄像头采集、授权流程、编码与后台常驻这些论证仍然适用。
+
 ## 0. 执行摘要（先看这一节）
 
 **角色可用性总表**（被看 = 分享屏幕给他人；被控 = 接受他人的鼠标键盘）：

@@ -7,8 +7,7 @@
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
-use secrelay_media::{ScreenSource, SyntheticScreenSource, VideoFrame};
+use anyhow::{bail, Result};
 use secrelay_protocol::{Channel, ControlMessage, DeviceId};
 use secrelay_session::{capabilities, Session, SessionConfig, SessionEvent};
 use secrelay_transport::loopback_pair;
@@ -17,25 +16,13 @@ const HELP: &str = r#"SecRelay —— 跨设备连接，让看、传、说归于
 
 用法：
   secrelay selftest [媒体帧数]   在回环传输上跑通「一条通道 + 三个频道」（默认 32 帧）
-  secrelay capture [选项]        屏幕采集探针：量化帧率、抖动与「相邻帧变化比例」
   secrelay channels              打印频道模型
   secrelay version               打印版本
   secrelay help                  显示本帮助
 
-capture 选项：
-  --synthetic          用合成画面源（不采集真实屏幕，任何平台都能跑）
-  --seconds <秒>       采集时长，默认 5
-  --size <宽x高>       合成源的分辨率，默认 1920x1080
-  --fps <帧率>         合成源的目标帧率，默认 60
-  --save <路径>        把最后一帧存成 PNG（自写编码器，无第三方依赖）
-  --scale <倍数>       存图时按整数倍降采样，默认 1
-
 说明：当前是 M0 骨架，传输层只有回环实现。selftest 验证协议、协商与会话模型，
       不代表真实的 P2P 连通性已经跑通。
 "#;
-
-/// 采集探针里每帧的等待上限。
-const CAPTURE_FRAME_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// 自检用的文件大小（256 KiB）。
 const SELFTEST_FILE_BYTES: usize = 256 * 1024;
@@ -66,7 +53,6 @@ async fn main() -> ExitCode {
             print_channels();
             Ok(())
         }
-        "capture" => capture(&args[1..]),
         "version" | "--version" | "-V" => {
             println!("secrelay {}（协议版本 v{}）", env!("CARGO_PKG_VERSION"), secrelay_protocol::PROTOCOL_VERSION);
             Ok(())
@@ -105,7 +91,7 @@ fn print_channels() {
     println!("{:<10} {:<8} {:<10} 用途", "频道", "编号", "可丢帧");
     println!("{}", "-".repeat(64));
     let purposes = [
-        "屏幕 / 摄像头 / 麦克风：低延迟优先",
+        "摄像头 / 麦克风：低延迟优先",
         "文件 / 剪贴板大对象：必达、可分块续传",
         "文字消息 / 桌面提示 / 会话控制：必达、有序",
     ];
@@ -279,7 +265,7 @@ async fn selftest(media_frames: usize) -> Result<()> {
     );
     println!("\n耗时 {:?}", started.elapsed());
     println!("\n注意：这次跑的是回环传输，只证明协议与会话模型成立。");
-    println!("下一步要验证的是真实的 P2P 连通性（ICE 打洞成功率）与屏幕采集管线。");
+    println!("下一步要验证的是真实的 P2P 连通性（ICE 打洞成功率）与媒体管线。");
     Ok(())
 }
 
@@ -299,268 +285,6 @@ fn yes_no(value: bool) -> &'static str {
     } else {
         "否"
     }
-}
-
-// ─────────────────────────────────────────────────────────── 采集探针
-
-/// 采集探针：回答三个 M0 必须回答的问题。
-///
-/// 1. **能不能稳定采到目标帧率**（帧间隔分布）？
-/// 2. **桌面静止时有多少帧其实是空转**（没有新画面）？
-/// 3. **相邻帧的变化区域有多大** —— 这直接决定脏矩形差分的收益上限。
-///    需求分析 §6.3 说它的收益（5~50 倍）比"换编解码器"（1.5~2 倍）大一个数量级，
-///    这里就是把这个说法量化成我们自己环境下的数字。
-fn capture(args: &[String]) -> Result<()> {
-    let mut seconds = 5.0f64;
-    let mut synthetic = false;
-    let mut size = (1920u32, 1080u32);
-    let mut fps = 60u32;
-    let mut save: Option<std::path::PathBuf> = None;
-    let mut scale = 1u32;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--synthetic" => {
-                synthetic = true;
-                index += 1;
-            }
-            "--seconds" => {
-                seconds = args
-                    .get(index + 1)
-                    .context("--seconds 需要一个数值")?
-                    .parse()
-                    .context("--seconds 必须是数字")?;
-                index += 2;
-            }
-            "--size" => {
-                size = parse_size(args.get(index + 1).context("--size 需要 宽x高")?)?;
-                index += 2;
-            }
-            "--fps" => {
-                fps = args
-                    .get(index + 1)
-                    .context("--fps 需要一个数值")?
-                    .parse()
-                    .context("--fps 必须是数字")?;
-                index += 2;
-            }
-            "--save" => {
-                save = Some(
-                    args.get(index + 1)
-                        .context("--save 需要一个路径")?
-                        .into(),
-                );
-                index += 2;
-            }
-            "--scale" => {
-                scale = args
-                    .get(index + 1)
-                    .context("--scale 需要一个整数")?
-                    .parse()
-                    .context("--scale 必须是整数")?;
-                if scale == 0 {
-                    bail!("--scale 必须大于 0");
-                }
-                index += 2;
-            }
-            other => bail!("capture 的未知参数：{other}"),
-        }
-    }
-
-    if seconds <= 0.0 {
-        bail!("--seconds 必须大于 0");
-    }
-
-    let mut source = build_source(synthetic, size, fps)?;
-
-    println!("SecRelay 采集探针");
-    println!("{}", "=".repeat(64));
-    println!("采集源：{}", source.description());
-    println!("时长：{seconds}s");
-    println!();
-
-    let started = Instant::now();
-    let deadline = started + Duration::from_secs_f64(seconds);
-
-    let mut frames: u64 = 0;
-    let mut idle: u64 = 0; // 没有新画面的轮次
-    let mut bytes: u64 = 0;
-    let mut intervals: Vec<Duration> = Vec::new();
-    let mut diff_sum = 0.0f64;
-    let mut diff_samples: u64 = 0;
-    let mut diff_min = f32::MAX;
-    let mut diff_max = 0.0f32;
-    let mut previous: Option<VideoFrame> = None;
-    let mut last_capture: Option<Instant> = None;
-    let mut platform_errors: Vec<String> = Vec::new();
-
-    while Instant::now() < deadline {
-        match source.next_frame(CAPTURE_FRAME_TIMEOUT) {
-            Ok(Some(frame)) => {
-                let now = Instant::now();
-                if let Some(prev_time) = last_capture {
-                    intervals.push(now - prev_time);
-                }
-                last_capture = Some(now);
-
-                if let Some(prev) = &previous {
-                    let ratio = prev.diff_ratio(&frame);
-                    diff_sum += f64::from(ratio);
-                    diff_samples += 1;
-                    diff_min = diff_min.min(ratio);
-                    diff_max = diff_max.max(ratio);
-                }
-
-                bytes += frame.data.len() as u64;
-                frames += 1;
-                previous = Some(frame);
-            }
-            Ok(None) => {
-                // 桌面自上次采集以来没有变化 —— 这是重要信号，不是错误。
-                idle += 1;
-            }
-            Err(secrelay_media::CaptureError::Timeout(_)) => {
-                idle += 1;
-            }
-            Err(err) => {
-                // 采集错误不立即中断：先把已经采到的数据统计出来。
-                let text = err.to_string();
-                if !platform_errors.contains(&text) {
-                    platform_errors.push(text);
-                }
-                if frames == 0 {
-                    // 一帧都没采到，继续等没有意义。
-                    bail!("采集失败，且尚未取到任何帧：{err}");
-                }
-                break;
-            }
-        }
-    }
-
-    let elapsed = started.elapsed();
-    println!("结果");
-    println!("   有效帧：{frames}    空转（画面无变化）：{idle}");
-    println!(
-        "   实测帧率：{:.1} fps（目标 {} fps）",
-        frames as f64 / elapsed.as_secs_f64(),
-        if synthetic { fps.to_string() } else { "跟随屏幕刷新".into() }
-    );
-
-    if !intervals.is_empty() {
-        let mut sorted = intervals.clone();
-        sorted.sort();
-        let pick = |q: f64| -> f64 {
-            let idx = ((sorted.len() as f64 - 1.0) * q).round() as usize;
-            sorted[idx].as_secs_f64() * 1000.0
-        };
-        println!(
-            "   帧间隔：p50 {:.2}ms   p95 {:.2}ms   max {:.2}ms",
-            pick(0.50),
-            pick(0.95),
-            pick(1.0)
-        );
-    }
-
-    if let Some(frame) = &previous {
-        let frame_bytes = frame.data.len();
-        println!(
-            "   单帧未压缩：{}x{} BGRA = {:.2} MB",
-            frame.width,
-            frame.height,
-            frame_bytes as f64 / (1024.0 * 1024.0)
-        );
-        println!(
-            "   累计原始数据：{:.2} GB（{:.1} Mbps 未压缩）",
-            bytes as f64 / (1024.0 * 1024.0 * 1024.0),
-            (bytes as f64 * 8.0) / elapsed.as_secs_f64() / 1_000_000.0
-        );
-    }
-
-    if diff_samples > 0 {
-        let average = diff_sum / diff_samples as f64;
-        println!();
-        println!("脏矩形差分的依据");
-        println!(
-            "   相邻帧变化比例：平均 {:.2}%   最小 {:.2}%   最大 {:.2}%",
-            average * 100.0,
-            f64::from(diff_min) * 100.0,
-            f64::from(diff_max) * 100.0
-        );
-        if average > 0.0 {
-            println!(
-                "   理论收益上限：约 {:.0}×（只传变化区域 vs 整帧）",
-                1.0 / average
-            );
-        }
-        println!("   注：这是变化像素的**比例**，还不是脏矩形面积 —— 真正实现时按矩形合并会更大。");
-    } else if frames > 0 {
-        println!("\n   样本不足，无法给出相邻帧变化比例（多采一会儿）。");
-    }
-
-    if !platform_errors.is_empty() {
-        println!();
-        println!("采集期间出现的错误：");
-        for err in &platform_errors {
-            println!("   ! {err}");
-        }
-    }
-
-    if let Some(path) = &save {
-        let frame = previous
-            .as_ref()
-            .context("没有采到任何帧，无法存图")?;
-        let png = secrelay_media::png::encode(frame, scale)?;
-        std::fs::write(path, &png).with_context(|| format!("写入 {} 失败", path.display()))?;
-
-        println!();
-        println!("已保存截图：{}", path.display());
-        println!(
-            "   {}x{}（降采样 {}x）→ {:.2} MB",
-            frame.width.div_ceil(scale),
-            frame.height.div_ceil(scale),
-            scale,
-            png.len() as f64 / (1024.0 * 1024.0)
-        );
-    }
-
-    println!("\n合计 {frames} 帧 / {:.2}s", elapsed.as_secs_f64());
-    Ok(())
-}
-
-fn build_source(
-    synthetic: bool,
-    size: (u32, u32),
-    fps: u32,
-) -> Result<Box<dyn ScreenSource>> {
-    if synthetic {
-        return Ok(Box::new(SyntheticScreenSource::new(size.0, size.1, fps)));
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let source = secrelay_media::DxgiScreenSource::new(0)
-            .context("打开 DXGI 桌面复制失败；可加 --synthetic 先验证其余链路")?;
-        Ok(Box::new(source))
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let _ = (size, fps);
-        bail!("该平台的采集后端尚未实现（目前只有 Windows DXGI 与合成源），请加 --synthetic")
-    }
-}
-
-fn parse_size(raw: &str) -> Result<(u32, u32)> {
-    let (width, height) = raw
-        .split_once(['x', 'X'])
-        .context("分辨率格式应为 宽x高，例如 1920x1080")?;
-    let width: u32 = width.trim().parse().context("宽度必须是整数")?;
-    let height: u32 = height.trim().parse().context("高度必须是整数")?;
-    if width == 0 || height == 0 {
-        bail!("分辨率必须大于 0");
-    }
-    Ok((width, height))
 }
 
 /// FNV-1a 64 位校验和。刻意不引第三方依赖 —— 这里只需要一个稳定的内容指纹。

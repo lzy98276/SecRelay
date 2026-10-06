@@ -89,8 +89,11 @@ fn main() -> anyhow::Result<()> {
     wire_relay_callbacks(&settings, &state, lang);
     start_relay_watch(&settings, &state, lang);
 
+    // 建连状态由另一个定时器从工作线程搬过来
+    bridge::install_status_pump(ui.as_weak());
+
     if let Some(page) = arg_value("--page").and_then(|value| value.parse::<i32>().ok()) {
-        ui.set_current_page(page.clamp(0, 4));
+        ui.set_current_page(page.clamp(0, 3));
     }
 
     // ── 设置窗口开关
@@ -220,17 +223,52 @@ fn main() -> anyhow::Result<()> {
     }
 
     // ── 连接 / 断开
-    let weak = ui.as_weak();
-    ui.on_connect_clicked(move || {
-        let Some(ui) = weak.upgrade() else {
-            return;
-        };
-        if bridge::is_connected() {
-            bridge::request_disconnect();
-        } else {
-            bridge::spawn_demo_session(ui.as_weak(), lang);
-        }
-    });
+    //
+    // 建连跑在工作线程上，这里只决定"发起 / 加入 / 断开"，把活交给 bridge。
+    // 本机 UDP 绑定地址默认是所有网卡的随机端口，`--bind` 可以指定。
+    let bind = bind_addrs();
+    {
+        let weak = ui.as_weak();
+        let connect_state = Rc::clone(&state);
+        let connect_bind = Rc::clone(&bind);
+        ui.on_connect_clicked(move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            match bridge::connect_action(&ui.get_join_code()) {
+                bridge::ConnectAction::Disconnect => bridge::request_disconnect(),
+                bridge::ConnectAction::Offer => {
+                    begin_session(&ui, &connect_state, &connect_bind, lang, "")
+                }
+                bridge::ConnectAction::Join => {
+                    let code = ui.get_join_code().to_string();
+                    if !bridge::session_code_valid(&code) {
+                        ui.set_join_error_text(join_error(lang, &code));
+                        return;
+                    }
+                    ui.set_join_error_text("".into());
+                    begin_session(&ui, &connect_state, &connect_bind, lang, &code);
+                }
+            }
+        });
+
+        // ── 加入按钮：语义同"填了会话码再点连接"
+        let weak = ui.as_weak();
+        let join_state = Rc::clone(&state);
+        let join_bind = Rc::clone(&bind);
+        ui.on_join_clicked(move |code| {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let code = code.to_string();
+            if !bridge::session_code_valid(&code) {
+                ui.set_join_error_text(join_error(lang, &code));
+                return;
+            }
+            ui.set_join_error_text("".into());
+            begin_session(&ui, &join_state, &join_bind, lang, &code);
+        });
+    }
 
     // ── 发送文字
     let weak = ui.as_weak();
@@ -247,19 +285,6 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    // ── 本机画面预览
-    let weak = ui.as_weak();
-    ui.on_preview_toggle_clicked(move || {
-        let Some(ui) = weak.upgrade() else {
-            return;
-        };
-        if bridge::is_previewing() {
-            bridge::stop_preview();
-        } else {
-            bridge::start_preview(ui.as_weak(), lang);
-        }
-    });
-
     ui.on_open_log_dir_clicked(open_logs);
     settings.on_open_log_dir_clicked(open_logs);
 
@@ -268,18 +293,97 @@ fn main() -> anyhow::Result<()> {
         tracing::info!("登录入口被点击：账号系统尚未接入");
     });
 
-    if std::env::args().any(|arg| arg == "--demo") {
-        schedule_demo(&ui, lang);
-    }
-    if std::env::args().any(|arg| arg == "--preview") {
-        bridge::start_preview(ui.as_weak(), lang);
-    }
     if std::env::args().any(|arg| arg == "--settings") {
         settings.show()?;
     }
 
+    // 脚本化入口：两个实例可以用窗口按钮走完整流程，也可以用这几个参数自动走一遍。
+    if let Some(code) = arg_value("--join") {
+        ui.set_join_code(code.into());
+    }
+    if std::env::args().any(|arg| arg == "--connect") || arg_value("--join").is_some() {
+        let weak = ui.as_weak();
+        let state = state.clone();
+        slint::Timer::single_shot(Duration::from_millis(900), move || {
+            let Some(ui) = weak.upgrade() else {
+                return;
+            };
+            let code = ui.get_join_code().to_string();
+            begin_session(&ui, &state, &bind, lang, &code);
+        });
+    }
+    if let Some(text) = arg_value("--send") {
+        // 会话建好之前发不出去，所以按定时器重试，直到界面真的连上。
+        let weak = ui.as_weak();
+        let attempts = Rc::new(std::cell::Cell::new(0_u32));
+        let timer = Rc::new(slint::Timer::default());
+        let stop = timer.clone();
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_millis(300),
+            move || {
+                let count = attempts.get() + 1;
+                attempts.set(count);
+                if count > 60 {
+                    stop.stop();
+                    return;
+                }
+                let Some(ui) = weak.upgrade() else {
+                    stop.stop();
+                    return;
+                };
+                if !bridge::is_connected() {
+                    return;
+                }
+                if bridge::send_text(text.clone()) {
+                    ui.set_message_input("".into());
+                    stop.stop();
+                }
+            },
+        );
+    }
+
     ui.run()?;
     Ok(())
+}
+
+/// 本机 UDP 绑定地址：`--bind addr[,addr]`，缺省绑所有网卡的随机端口。
+fn bind_addrs() -> Rc<Vec<String>> {
+    Rc::new(
+        arg_value("--bind")
+            .map(|value| {
+                value
+                    .split(',')
+                    .map(|addr| addr.trim().to_string())
+                    .filter(|addr| !addr.is_empty())
+                    .collect()
+            })
+            .unwrap_or_else(secrelay_transport::ice::default_udp_addrs),
+    )
+}
+
+/// 会话码不合法时的提示文案。
+fn join_error(lang: Lang, code: &str) -> slint::SharedString {
+    Key::DeviceJoinError
+        .format(lang, &[("detail", code.trim())])
+        .into()
+}
+
+/// 按当前选中的中继发起一次建连。
+///
+/// 失败只提示、不假装连上：会在界面与日志里如实写出原因。
+fn begin_session(
+    ui: &AppWindow,
+    state: &Rc<RefCell<UiState>>,
+    bind: &[String],
+    lang: Lang,
+    session_code: &str,
+) {
+    let endpoint = state.borrow().relays.selected_url().to_string();
+    if let Err(err) = bridge::start_session(ui, lang, &endpoint, bind, session_code) {
+        tracing::warn!("无法开始建连：{err}");
+        ui.set_join_error_text(Key::DeviceStartError.format(lang, &[("detail", &err)]).into());
+    }
 }
 
 /// 当前外观选择。
@@ -612,26 +716,6 @@ fn arg_value(flag: &str) -> Option<String> {
 
 fn apply_version(settings: &SettingsWindow) {
     settings.set_version(concat!("v", env!("CARGO_PKG_VERSION")).into());
-}
-
-/// `--demo` 的自动播放脚本。
-fn schedule_demo(ui: &AppWindow, lang: Lang) {
-    let weak = ui.as_weak();
-    slint::Timer::single_shot(Duration::from_millis(700), move || {
-        if let Some(ui) = weak.upgrade() {
-            ui.invoke_connect_clicked();
-        }
-    });
-
-    for delay in [2000_u64, 2700] {
-        let weak = ui.as_weak();
-        slint::Timer::single_shot(Duration::from_millis(delay), move || {
-            if let Some(ui) = weak.upgrade() {
-                let text: slint::SharedString = Key::DemoMessage.text(lang).into();
-                ui.invoke_send_clicked(text);
-            }
-        });
-    }
 }
 
 /// 日志写按天滚动的文件，不输出到界面。

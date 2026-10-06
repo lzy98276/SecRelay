@@ -1,7 +1,7 @@
 # SecRelay 跨平台 UI 技术选型调研
 
 - **调研时间**：2026-10-06（所有"今天"均指该日期）
-- **目标项目**：SecRelay —— 跨设备实时连接软件（远程桌面、远程摄像头、投屏、文件传输、语音/文字消息）
+- **目标项目**：SecRelay —— 跨设备实时连接软件（摄像头、文件传输、语音/文字消息；屏幕分享与投屏本阶段不做，文中相关论证依据留档）
 - **硬性约束**：Rust + 跨平台 UI；覆盖 Windows / Ubuntu-Debian Linux / macOS / Android / iOS；项目协议 GPLv3；需要实时显示解码后的视频帧（目标 60fps、1080p+，理想 4K）；很可能要上 Google Play 与 Apple App Store
 - **调研方法**：全部数据来自 crates.io API、项目官方文档站、GitHub REST API（发行版/仓库活跃度/issue 搜索）与官方仓库 raw 文件；每条关键结论附证据链接
 - **已知环境说明**：本机 DNS 将 `github.com` 解析到 127.0.0.1，`web_fetch` 无法直接抓取 `github.com` 页面正文；因此 GitHub issue/PR 的**标题、状态、日期、编号**通过 GitHub REST API 核实（属权威 API），但正文细节与部分官网页面未能逐字抓取，文中已标注"未核实"

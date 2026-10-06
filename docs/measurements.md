@@ -3,6 +3,12 @@
 > 记录**我们自己的机器上**测出来的数字。所有结论都可以用仓库里的命令复现。
 > 目的不是"证明性能好"，而是把设计文档里的假设换成实测值 —— 假设会错，数字不会。
 
+> ⚠️ **本阶段不做屏幕分享 / 远程看屏，依据留档。**
+> 下文记录 1~4 全部来自屏幕采集与界面预览，采集探针（`crates/secrelay-media`、
+> `secrelay capture`、`--preview`）已随方向调整移除，因此这些数字**不再可复现**，
+> 保留它们只作为技术依据（编解码、脏矩形、零拷贝这些判断对摄像头这一路同样成立）。
+> 「复现方式」一节里的采集命令已经不存在。
+
 ---
 
 ## 记录 1：Windows 屏幕采集（DXGI Desktop Duplication）
@@ -85,7 +91,7 @@
 
 **正确做法**：先 `ID3D11DeviceContext::CopyResource` 到一张
 `D3D11_USAGE_STAGING` + `D3D11_CPU_ACCESS_READ` 的纹理，再 Map 那张。
-该纹理在采集源构造时创建一次、每帧复用。见 `crates/secrelay-media/src/windows_dxgi.rs`。
+该纹理在采集源构造时创建一次、每帧复用（原实现在已移除的 `crates/secrelay-media/src/windows_dxgi.rs`）。
 
 ---
 
@@ -143,18 +149,21 @@
 
 ## 复现方式
 
+> ⚠️ 下面两条 `capture` 命令依赖已移除的采集探针，在当前仓库里**已经跑不了**；
+> 只剩 `selftest` 可用。列出旧命令只为说明当时的测量环境。
+
 ```bash
-# 真实屏幕采集（Windows）
+# 真实屏幕采集（Windows）—— 探针已移除
 cargo build --release -p secrelay-cli
 target\release\secrelay.exe capture --seconds 5
 
-# 合成画面源（任何平台都能跑，不需要显示器）
+# 合成画面源（任何平台都能跑，不需要显示器）—— 探针已移除
 cargo run --release -p secrelay-cli -- capture --synthetic --seconds 5
 
-# 协议与会话模型自检
+# 协议与会话模型自检 —— 仍然可用
 cargo run --release -p secrelay-cli -- selftest
 ```
 
 > 提示：`capture --synthetic` 的图案刻意包含**小范围移动方块**与**底部状态条**，
 > 所以它的变化比例是已知且可控的 —— 适合用来验证将来的脏矩形实现是否正确，
-> 而不是用来估收益。
+> 而不是用来估收益。该合成源同样已随采集代码移除。

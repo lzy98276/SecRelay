@@ -12,7 +12,9 @@
 //! 本 crate 提供两种实现：
 //!
 //! - [`WebRtcTransport`]：真实网络上的 ICE 打洞 + DataChannel，ICE 服务器列表由
-//!   [`IceConfig`] 传入（STUN/TURN + 短期凭据）。
+//!   [`IceConfig`] 传入（STUN/TURN + 短期凭据）。建连前会逐台探测 STUN 服务器，
+//!   并把通配绑定收窄到可用网卡的地址，两者都是为了让一台不响应或一块虚拟网卡
+//!   不拖累整轮候选收集。
 //! - [`loopback_pair`]：进程内回环，让协议与会话逻辑能脱离真实网络被测试。
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -29,7 +31,7 @@ mod webrtc_transport;
 pub use ice::{parse_bind_addr, IceConfig, IceServerConfig};
 pub use webrtc_transport::{
     CandidatePair, WebRtcTransport, DATA_CHANNEL_LABEL, DEFAULT_CONNECT_TIMEOUT,
-    DEFAULT_GATHER_TIMEOUT, MAX_DATACHANNEL_MESSAGE,
+    DEFAULT_GATHER_TIMEOUT, ICE_PROBE_TIMEOUT, IFACE_CACHE_TTL, MAX_DATACHANNEL_MESSAGE,
 };
 
 /// 回环通道的缓冲帧数。

@@ -38,7 +38,6 @@ export global Strings {
     in property <string> group-system: "";
 
     in property <string> nav-devices: "";
-    in property <string> nav-screen: "";
     in property <string> nav-camera: "";
     in property <string> nav-files: "";
     in property <string> nav-messages: "";
@@ -51,21 +50,23 @@ export global Strings {
     in property <string> session-channels: "";
     in property <string> session-capabilities: "";
     in property <string> session-none: "";
+    in property <string> session-code-label: "";
+    in property <string> session-code-input-hint: "";
+    in property <string> device-link-label: "";
+    in property <string> device-link-direct: "";
+    in property <string> device-link-relayed: "";
+    in property <string> device-join-error: "";
+    in property <string> device-start-error: "";
+    in property <string> device-session-failed: "";
 
     in property <string> action-connect: "";
     in property <string> action-disconnect: "";
+    in property <string> action-join: "";
     in property <string> action-send: "";
-    in property <string> action-preview-start: "";
-    in property <string> action-preview-stop: "";
     in property <string> action-open-log-dir: "";
 
     in property <string> message-placeholder: "";
     in property <string> messages-empty: "";
-
-    in property <string> preview-title: "";
-    in property <string> preview-empty: "";
-    in property <string> preview-empty-hint: "";
-    in property <string> preview-disclaimer: "";
 
     in property <string> settings-title: "";
     in property <string> settings-appearance: "";
@@ -203,11 +204,18 @@ component SettingRow inherits HorizontalLayout {
 // ───────────────────────────────────────────── 页面：设备
 component DevicesPage inherits ScrollView {
     in property <bool> connected: false;
+    in property <bool> busy: false;
     in property <string> state-text: "";
     in property <string> peer-text: "";
     in property <string> channels-text: "";
     in property <string> capabilities-text: "";
+    in property <string> link-text: "";
+    in property <bool> has-link: false;
+    in property <string> session-code-text: "";
+    in property <string> join-error-text: "";
+    in-out property <string> join-code: "";
     callback toggle-connect();
+    callback join-clicked(string);
 
     VerticalLayout {
         padding: 24px;
@@ -227,7 +235,7 @@ component DevicesPage inherits ScrollView {
                     font-size: 15px;
                     font-weight: 600;
                     vertical-alignment: center;
-                    color: Palette.accent-background;
+                    color: root.connected ? Palette.accent-background : Palette.foreground;
                 }
                 Text {
                     text: root.peer-text;
@@ -244,9 +252,39 @@ component DevicesPage inherits ScrollView {
                     }
                 }
             }
+
+            // 加入别人的会话：填对端给出的会话码
+            if !root.connected && !root.busy : HorizontalLayout {
+                spacing: 8px;
+                LineEdit {
+                    horizontal-stretch: 1;
+                    placeholder-text: Strings.session-code-input-hint;
+                    text <=> root.join-code;
+                    accepted => {
+                        root.join-clicked(root.join-code);
+                    }
+                }
+                Button {
+                    text: Strings.action-join;
+                    enabled: root.join-code != "";
+                    clicked => {
+                        root.join-clicked(root.join-code);
+                    }
+                }
+            }
+
+            if root.join-error-text != "" : Text {
+                text: root.join-error-text;
+                font-size: 12px;
+                wrap: word-wrap;
+                color: Palette.foreground;
+            }
+
+            FieldRow { label: Strings.session-code-label; value: root.session-code-text; }
             FieldRow { label: Strings.session-peer; value: root.peer-text; }
             FieldRow { label: Strings.session-channels; value: root.channels-text; }
             FieldRow { label: Strings.session-capabilities; value: root.capabilities-text; }
+            if root.has-link : FieldRow { label: Strings.device-link-label; value: root.link-text; }
             }
         }
 
@@ -263,72 +301,6 @@ component DevicesPage inherits ScrollView {
             }
             HintText { text: Strings.devices-hint; horizontal-alignment: center; }
             }
-        }
-    }
-}
-
-// ───────────────────────────────────────────── 页面：远程桌面
-component ScreenPage inherits VerticalLayout {
-    in property <image> preview;
-    in property <bool> previewing: false;
-    in property <string> preview-stats: "";
-    callback toggle-preview();
-
-    padding: 24px;
-    spacing: 16px;
-
-    HorizontalLayout {
-        spacing: 12px;
-        PageTitle { text: Strings.preview-title; vertical-alignment: center; }
-        HintText {
-            text: root.preview-stats;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
-        }
-    }
-
-    Rectangle {
-        vertical-stretch: 1;
-        background: Palette.alternate-background;
-        border-radius: 6px;
-        border-width: 1px;
-        border-color: Palette.border;
-
-        if root.previewing : Image {
-            source: root.preview;
-            image-fit: contain;
-        }
-
-        if !root.previewing : VerticalLayout {
-            alignment: center;
-            spacing: 10px;
-            padding: 24px;
-            Text {
-                text: Strings.preview-empty;
-                horizontal-alignment: center;
-                font-size: 15px;
-                color: Palette.foreground;
-            }
-            HintText {
-                text: Strings.preview-empty-hint;
-                horizontal-alignment: center;
-            }
-        }
-    }
-
-    HorizontalLayout {
-        spacing: 12px;
-        Button {
-            text: root.previewing ? Strings.action-preview-stop : Strings.action-preview-start;
-            primary: !root.previewing;
-            clicked => {
-                root.toggle-preview();
-            }
-        }
-        HintText {
-            text: Strings.preview-disclaimer;
-            vertical-alignment: center;
-            horizontal-stretch: 1;
         }
     }
 }
@@ -461,6 +433,14 @@ component RelayList inherits VerticalLayout {
             ? Palette.control-background
             : Palette.alternate-background;
 
+        // 点行本身即选中。必须声明在内容之前：Slint 里后声明的在上层，
+        // 若放在按钮之后会把按钮盖住、吞掉删除的点击。
+        TouchArea {
+            clicked => {
+                root.select(idx);
+            }
+        }
+
         HorizontalLayout {
             padding: 6px;
             spacing: 8px;
@@ -514,13 +494,6 @@ component RelayList inherits VerticalLayout {
                 }
             }
         }
-
-        // 点行本身即选中；按钮在上面，点按钮不会走到这里
-        TouchArea {
-            clicked => {
-                root.select(idx);
-            }
-        }
     }
 }
 
@@ -533,20 +506,23 @@ export component AppWindow inherits Window {
     default-font-family: UiFont.family;
     default-font-weight: UiFont.weight;
 
-    // 0 设备 / 1 远程桌面 / 2 摄像头 / 3 文件 / 4 消息
+    // 0 设备 / 1 摄像头 / 2 文件 / 3 消息
     in-out property <int> current-page: 0;
 
     // 底部账号/设置列表的选中项，点完清回 -1
     in-out property <int> nav-system: -1;
 
     in property <bool> connected: false;
+    in property <bool> busy: false;
     in property <string> state-text: "";
     in property <string> peer-text: "";
     in property <string> channels-text: "";
     in property <string> capabilities-text: "";
-    in property <image> preview;
-    in property <bool> previewing: false;
-    in property <string> preview-stats: "";
+    in property <string> link-text: "";
+    in property <bool> has-link: false;
+    in property <string> session-code-text: "";
+    in property <string> join-error-text: "";
+    in-out property <string> join-code: "";
     in property <[ChatMessage]> messages: [];
     in-out property <string> message-input: "";
     in property <string> language-name: "";
@@ -555,8 +531,8 @@ export component AppWindow inherits Window {
     in property <string> account-subtitle: "";
 
     callback connect-clicked();
+    callback join-clicked(string);
     callback send-clicked(string);
-    callback preview-toggle-clicked();
     callback open-log-dir-clicked();
     callback settings-clicked();
     callback login-clicked();
@@ -596,7 +572,6 @@ export component AppWindow inherits Window {
                     height: 240px;
                     model: [
                         { text: Strings.nav-devices },
-                        { text: Strings.nav-screen },
                         { text: Strings.nav-camera },
                         { text: Strings.nav-files },
                         { text: Strings.nav-messages },
@@ -635,27 +610,27 @@ export component AppWindow inherits Window {
             DevicesPage {
                 visible: root.current-page == 0;
                 connected: root.connected;
+                busy: root.busy;
                 state-text: root.state-text;
                 peer-text: root.peer-text;
                 channels-text: root.channels-text;
                 capabilities-text: root.capabilities-text;
+                link-text: root.link-text;
+                has-link: root.has-link;
+                session-code-text: root.session-code-text;
+                join-error-text: root.join-error-text;
+                join-code <=> root.join-code;
                 toggle-connect => {
                     root.connect-clicked();
                 }
-            }
-            ScreenPage {
-                visible: root.current-page == 1;
-                preview: root.preview;
-                previewing: root.previewing;
-                preview-stats: root.preview-stats;
-                toggle-preview => {
-                    root.preview-toggle-clicked();
+                join-clicked(code) => {
+                    root.join-clicked(code);
                 }
             }
+            PlaceholderPage { visible: root.current-page == 1; }
             PlaceholderPage { visible: root.current-page == 2; }
-            PlaceholderPage { visible: root.current-page == 3; }
             MessagesPage {
-                visible: root.current-page == 4;
+                visible: root.current-page == 3;
                 messages: root.messages;
                 draft <=> root.message-input;
                 connected: root.connected;

@@ -1,4 +1,4 @@
-//! SecRelay 中继客户端。
+﻿//! SecRelay 中继客户端。
 //!
 //! 覆盖"能配置、能发现、能探活、能核对 ID、能连信令"这一段：给一个中继基址，
 //! 推导出发现/探活/信令地址，把 `/api/v1/relay` 的响应解析成类型，
@@ -25,7 +25,9 @@ pub mod url;
 pub use discovery::{discover, health, Discovery, Health, IceServer, RelayInfo};
 pub use error::Error;
 pub use identity::{relay_id, verify, IdCheck};
-pub use signaling::{ClientMsg, ServerMsg, SignalEvent, SignalSocket, PROTOCOL_VERSION};
+pub use signaling::{
+    ClientMsg, ServerMsg, SignalEvent, SignalSink, SignalSocket, PROTOCOL_VERSION,
+};
 pub use url::{Endpoint, Scheme};
 
 /// 内置的默认中继基址。
@@ -43,7 +45,7 @@ mod tests {
     #[test]
     fn 默认中继可用且短_id_与固定向量一致() {
         let endpoint = Endpoint::parse(DEFAULT_RELAY_BASE).unwrap();
-        assert_eq!(DEFAULT_RELAY_BASE, "https://relay.secrelay.dev");
+        assert_eq!(DEFAULT_RELAY_BASE, "https://secrelay-relay.sectl.cn");
         assert_eq!(endpoint.local_id(), "VQPG6YZOS3");
     }
 

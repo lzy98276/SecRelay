@@ -135,6 +135,42 @@ impl SignalSocket {
             .await
             .map_err(|err| Error::WebSocket(err.to_string()))
     }
+
+    /// 拆成发送端与接收端。
+    ///
+    /// 从发送端可以直接发 `bye`，不再借用 `SignalSocket`。
+    pub fn split(
+        self,
+    ) -> (
+        SignalSink,
+        futures_util::stream::SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
+    ) {
+        (SignalSink { sink: self.sink }, self.stream)
+    }
+}
+
+/// 信令的发送端。
+pub struct SignalSink {
+    sink: futures_util::stream::SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
+}
+
+impl SignalSink {
+    /// 发一条消息。
+    pub async fn send(&mut self, msg: &ClientMsg) -> Result<(), Error> {
+        let text = serde_json::to_string(msg)
+            .map_err(|err| Error::WebSocket(format!("序列化失败：{err}")))?;
+        self.sink
+            .send(Message::Text(text.into()))
+            .await
+            .map_err(|err| Error::WebSocket(err.to_string()))
+    }
+
+    /// 发 `bye` 后关闭。连接已经断了不算错。
+    pub async fn close(mut self) -> Result<(), Error> {
+        let _ = self.send(&ClientMsg::Bye).await;
+        let _ = self.sink.close().await;
+        Ok(())
+    }
 }
 
 /// 信令地址的协议、主机与端口。

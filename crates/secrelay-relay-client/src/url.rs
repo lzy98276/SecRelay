@@ -1,4 +1,4 @@
-//! 中继基址的解析、校验与规范化。
+﻿//! 中继基址的解析、校验与规范化。
 //!
 //! 用户只输入一个基址（`https://relay.example.com`），其余地址都从这里推导：
 //! `/api/v1/relay`、`/healthz`、`/ws/signal`。
@@ -129,7 +129,7 @@ impl Endpoint {
     }
 
     /// 内置的默认中继基址。开箱可用。
-    pub const DEFAULT_BASE: &'static str = "https://relay.secrelay.dev";
+    pub const DEFAULT_BASE: &'static str = "https://secrelay-relay.sectl.cn";
 
     pub fn scheme(&self) -> Scheme {
         self.inner.scheme

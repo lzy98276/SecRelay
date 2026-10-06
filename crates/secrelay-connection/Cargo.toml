@@ -1,0 +1,24 @@
+[package]
+name = "secrelay-connection"
+description = "SecRelay 建连编排：中继发现 + 信令交换 + ICE 打洞 + 会话握手，打洞失败回退中继"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+secrelay-protocol.workspace = true
+secrelay-relay-client.workspace = true
+secrelay-session.workspace = true
+secrelay-transport.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+sha1.workspace = true
+tracing-subscriber.workspace = true

@@ -82,7 +82,6 @@ pub enum Key {
 
     // ── 导航
     NavDevices,
-    NavScreen,
     NavCamera,
     NavFiles,
     NavMessages,
@@ -112,6 +111,21 @@ pub enum Key {
     SessionChannels,
     SessionCapabilities,
     SessionNone,
+
+    // ── 设备页：会话码与建连结果
+    SessionCodeLabel,
+    SessionCodeInputHint,
+    ActionJoin,
+    DeviceStateWaitingPeer,
+    DeviceStateConnectedDirect,
+    DeviceStateConnectedRelayed,
+    DeviceStateDisconnected,
+    DeviceLinkLabel,
+    DeviceLinkDirect,
+    DeviceLinkRelayed,
+    DeviceJoinError,
+    DeviceStartError,
+    DeviceSessionFailed,
 
     // ── 操作
     ActionConnect,
@@ -213,17 +227,6 @@ pub enum Key {
     LogDisconnected,
     LogDemoMode,
 
-    // ── 画面预览
-    PreviewTitle,
-    PreviewEmpty,
-    PreviewEmptyHint,
-    ActionPreviewStart,
-    ActionPreviewStop,
-    PreviewDisclaimer,
-    StatsFps,
-    StatsChange,
-    StatsSize,
-
     ErrorGeneric,
     ErrorNotConnected,
     ErrorNotImplemented,
@@ -238,7 +241,6 @@ impl Key {
         Key::AppName,
         Key::AppTagline,
         Key::NavDevices,
-        Key::NavScreen,
         Key::NavCamera,
         Key::NavFiles,
         Key::NavMessages,
@@ -262,6 +264,19 @@ impl Key {
         Key::SessionChannels,
         Key::SessionCapabilities,
         Key::SessionNone,
+        Key::SessionCodeLabel,
+        Key::SessionCodeInputHint,
+        Key::ActionJoin,
+        Key::DeviceStateWaitingPeer,
+        Key::DeviceStateConnectedDirect,
+        Key::DeviceStateConnectedRelayed,
+        Key::DeviceStateDisconnected,
+        Key::DeviceLinkLabel,
+        Key::DeviceLinkDirect,
+        Key::DeviceLinkRelayed,
+        Key::DeviceJoinError,
+        Key::DeviceStartError,
+        Key::DeviceSessionFailed,
         Key::ActionConnect,
         Key::ActionDisconnect,
         Key::ActionSend,
@@ -345,15 +360,6 @@ impl Key {
         Key::ErrorGeneric,
         Key::ErrorNotConnected,
         Key::ErrorNotImplemented,
-        Key::PreviewTitle,
-        Key::PreviewEmpty,
-        Key::PreviewEmptyHint,
-        Key::ActionPreviewStart,
-        Key::ActionPreviewStop,
-        Key::PreviewDisclaimer,
-        Key::StatsFps,
-        Key::StatsChange,
-        Key::StatsSize,
         Key::DemoMessage,
     ];
 
@@ -372,7 +378,6 @@ impl Key {
             Key::AppTagline => "跨设备连接，让看、传、说归于一处",
 
             Key::NavDevices => "设备",
-            Key::NavScreen => "远程桌面",
             Key::NavCamera => "摄像头",
             Key::NavFiles => "文件",
             Key::NavMessages => "消息",
@@ -399,6 +404,20 @@ impl Key {
             Key::SessionChannels => "已协商频道",
             Key::SessionCapabilities => "共同能力",
             Key::SessionNone => "无",
+
+            Key::SessionCodeLabel => "会话码",
+            Key::SessionCodeInputHint => "留空表示由本机生成会话码；填入另一台设备的会话码则加入该会话",
+            Key::ActionJoin => "加入",
+            Key::DeviceStateWaitingPeer => "等待对端…",
+            Key::DeviceStateConnectedDirect => "已连接（直连）",
+            Key::DeviceStateConnectedRelayed => "已连接（经服务端转发）",
+            Key::DeviceStateDisconnected => "已断开",
+            Key::DeviceLinkLabel => "连接方式",
+            Key::DeviceLinkDirect => "直连",
+            Key::DeviceLinkRelayed => "经服务端转发",
+            Key::DeviceJoinError => "会话码不合法：{detail}",
+            Key::DeviceStartError => "无法开始建连：{detail}",
+            Key::DeviceSessionFailed => "连接失败：{reason}",
 
             Key::ActionConnect => "连接",
             Key::ActionDisconnect => "断开",
@@ -491,16 +510,6 @@ impl Key {
             Key::LogDisconnected => "已断开连接",
             Key::LogDemoMode => "M0 演示：使用进程内回环连接，真实 P2P 尚未接入",
 
-            Key::PreviewTitle => "画面",
-            Key::PreviewEmpty => "尚未开始预览",
-            Key::PreviewEmptyHint => "点下面的按钮，把本机桌面采集到这里，用来验证视频通路",
-            Key::ActionPreviewStart => "开始本机预览",
-            Key::ActionPreviewStop => "停止预览",
-            Key::PreviewDisclaimer => "M0 探针：本机采集直接在界面回显，尚未经过编码与网络传输",
-            Key::StatsFps => "{fps} fps",
-            Key::StatsChange => "画面变化 {ratio}%",
-            Key::StatsSize => "{width}×{height}",
-
             Key::ErrorGeneric => "出错了：{detail}",
             Key::ErrorNotConnected => "尚未建立连接",
             Key::ErrorNotImplemented => "该功能尚未实现",
@@ -574,7 +583,7 @@ mod tests {
         // 防止新增 Key 变体后忘记加进 ALL —— 那样上面的穷尽检查会漏掉它。
         // Rust 无法在不引宏的情况下枚举枚举变体，所以这里用一个数字做绊线：
         // 变体数一变，这个测试就失败，提醒维护者同步 ALL。
-        const EXPECTED: usize = 120;
+        const EXPECTED: usize = 123;
         assert_eq!(
             Key::ALL.len(),
             EXPECTED,

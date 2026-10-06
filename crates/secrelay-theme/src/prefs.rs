@@ -1,4 +1,4 @@
-//! 本地偏好设置。
+﻿//! 本地偏好设置。
 //!
 //! # 为什么用 `key=value` 而不是 TOML/JSON
 //!
@@ -23,7 +23,7 @@ const FILE_NAME: &str = "config.txt";
 /// 内置的默认中继基址。
 ///
 /// 与 `secrelay-relay-client` 的同名常量保持一致：这里存的是"文本"，不引入那个依赖。
-pub const DEFAULT_RELAY_BASE: &str = "https://relay.secrelay.dev";
+pub const DEFAULT_RELAY_BASE: &str = "https://secrelay-relay.sectl.cn";
 
 /// 本地偏好。
 #[derive(Debug, Clone, PartialEq)]

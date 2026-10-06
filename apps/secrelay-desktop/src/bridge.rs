@@ -1,31 +1,37 @@
 //! UI ↔ Rust 的桥接层。
 //!
-//! 这一层是需求分析 §6.1 里"UI 层只做三件事"的落点：**显示帧、显示状态、发出意图**。
-//! 它不认识 WebRTC，也不认识编码器；只跟 `secrelay-session` 的公开 API 打交道。
+//! UI 层只做三件事：**显示帧、显示状态、发出意图**。它不认识 WebRTC，也不认识编码器；
+//! 建连与收发文字都交给 `secrelay-connection` 与 `secrelay-session`。
 //!
 //! # 两条设计约定
 //!
 //! 1. **界面里没有日志。** 所有诊断信息走 `tracing` 写文件，UI 只在设置页提供一个
-//!    打开日志目录的入口。用户视角不应该感觉到日志的存在 —— 这是"无感"的一部分。
-//! 2. **消息是独立的数据，不是日志。** 会话消息有自己的列表模型，与诊断信息彻底分开，
-//!    否则用户会在"发消息"的地方看到一堆内部事件。
+//!    打开日志目录的入口。
+//! 2. **消息是独立的数据，不是日志。** 会话消息有自己的列表模型，与诊断信息彻底分开。
 //!
-//! # 当前是 M0 演示
+//! # 线程模型
 //!
-//! 会话跑在**进程内回环传输**上（两个 `Session` 直连）。**这不是真实 P2P** ——
-//! 设置页与日志里都会明确标注，避免被误读成连通性已经跑通。
+//! Slint 跑在主线程，建连是异步的，所以：
+//!
+//! - 建连与收发都在**一条工作线程**上跑（线程内自建 current-thread 运行时）；
+//! - 界面线程只做三件事：把用户意图投进通道、置取消标志、按定时器取状态；
+//! - 状态用 `std::sync::mpsc` 回投，由 Slint 定时器搬到界面上（与字体枚举、中继探测同一套做法）。
+//!
+//! 连接状态**如实显示**：只有 `secrelay-connection` 真的返回了连接才显示"已连接"，
+//! 并且区分"直连"与"经服务端转发"。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use secrelay_connection::{ConnectOptions, Connector, Progress};
 use secrelay_i18n::{Key, Lang};
-use secrelay_media::{scale_for_width, to_rgba_scaled, CaptureError, RgbaImage};
 use secrelay_protocol::{Channel, ControlMessage, DeviceId};
-use secrelay_session::{Session, SessionConfig, SessionEvent};
+use secrelay_session::{PeerInfo, SessionEvent};
 use secrelay_theme::ResolvedFont;
-use secrelay_transport::loopback_pair;
 use slint::{ComponentHandle, ModelRc, VecModel, Weak};
 
 use crate::{AppWindow, ChatMessage, SettingsWindow, Strings, UiFont};
@@ -35,31 +41,79 @@ use crate::{AppWindow, ChatMessage, SettingsWindow, Strings, UiFont};
 /// 用无界通道：UI 回调是同步的，不能 `.await`，所以这里只做投递。
 static OUTBOX: Mutex<Option<tokio::sync::mpsc::UnboundedSender<String>>> = Mutex::new(None);
 
-/// 当前是否有活跃会话。
-static CONNECTED: AtomicBool = AtomicBool::new(false);
-
-/// 本机画面预览是否在跑。
-static PREVIEWING: AtomicBool = AtomicBool::new(false);
+/// 当前是否有会话在跑（含"正在建连"）。
+static ACTIVE: AtomicBool = AtomicBool::new(false);
 
 /// 会话消息。UI 通过重建 `VecModel` 同步。
 static MESSAGES: Mutex<Vec<ChatMessage>> = Mutex::new(Vec::new());
 
-/// 预览画面的目标宽度。
+/// 建连会话的代号。
 ///
-/// 上限直接决定 CPU 开销：这条路径要在 CPU 上读满整帧、做盒式平均、再上传给 UI。
-/// 960 宽大约把 2560x1600 压到 1/9 的像素量。真正的解法是 GPU 纹理零拷贝。
-const PREVIEW_TARGET_WIDTH: u32 = 960;
+/// 断开之后线程可能还在收尾，它只能清理**自己那一代**留下的全局引用，
+/// 否则会把用户刚发起的新一轮建连踩掉。
+static GENERATION: AtomicU64 = AtomicU64::new(0);
 
-/// 预览刷新上限（约 15fps）。
-///
-/// 刻意限流：这是 CPU 拷贝路径，实测跑满会吃掉一个多核心（见 `docs/measurements.md`）。
-const PREVIEW_MIN_INTERVAL: Duration = Duration::from_millis(66);
+/// 建连的取消入口，留给界面线程。
+static CONNECTOR: Mutex<Option<(u64, Arc<Connector>)>> = Mutex::new(None);
 
-/// 会话线程检查发件箱的间隔。
+/// 当前会话的只读摘要，供界面线程同步读取。
+static CURRENT: Mutex<Option<Current>> = Mutex::new(None);
+
+/// 一条已建好的会话里界面用得上的那几项。
 ///
-/// 用轮询而不是 `select!`：`Session::next_event` 需要 `&mut self`，而发送也需要同一个
-/// `Session`，`select!` 的两个分支会抢同一个可变借用。50ms 的轮询对文字消息完全够用。
+/// 界面线程要的是几个值，而 `Connection` 必须留在会话线程上，所以建好之后摘一份出来。
+#[derive(Clone)]
+struct Current {
+    session_code: String,
+    peer: PeerInfo,
+    relayed: bool,
+    /// 这一轮是"直连尝试"还是"中继回退"。
+    via_relay_candidates: bool,
+}
+
+/// 取当前会话摘要。
+fn current() -> Option<Current> {
+    CURRENT.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+/// 状态回投给界面的那一端。
+static REPORTER: Mutex<Option<Sender<Update>>> = Mutex::new(None);
+
+/// 工作线程回投给界面的状态。
+enum Update {
+    /// 进度变化。
+    Progress(LinkState),
+    /// 会话结束（正常断开或失败）。
+    Stopped { reason: String },
+}
+
+/// 界面上要显示的一档连接状态。
+#[derive(Debug, Clone, PartialEq)]
+enum LinkState {
+    /// 正在建连；`detail` 是本轮的说明。
+    Connecting { detail: String },
+    /// 已经建好会话，正等对端进来（发起方才有这一档）。
+    WaitingPeer { session_code: String },
+    /// 会话已就绪。
+    Ready {
+        session_code: String,
+        peer: String,
+        channels: Vec<Channel>,
+        capabilities: Vec<String>,
+        relayed: bool,
+        /// 这一轮是"直连优先"还是"中继回退"。
+        via_relay_candidates: bool,
+    },
+}
+
+/// 收发循环检查发件箱与取消标志的间隔。
+///
+/// 用轮询而不是 `select!`：`next_event` 与 `send_control` 要同一个 `Session`，
+/// 轮询一次只借一处，代码也不必为借用问题绕路。50ms 对文字消息完全够用。
 const OUTBOX_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// 界面取状态的间隔。
+const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(120);
 
 // ────────────────────────────────────────────────────── 语言与文案
 
@@ -80,7 +134,6 @@ pub fn apply_strings(strings: Strings, lang: Lang) {
     strings.set_group_system(key(Key::GroupSystem));
 
     strings.set_nav_devices(key(Key::NavDevices));
-    strings.set_nav_screen(key(Key::NavScreen));
     strings.set_nav_camera(key(Key::NavCamera));
     strings.set_nav_files(key(Key::NavFiles));
     strings.set_nav_messages(key(Key::NavMessages));
@@ -93,21 +146,23 @@ pub fn apply_strings(strings: Strings, lang: Lang) {
     strings.set_session_channels(key(Key::SessionChannels));
     strings.set_session_capabilities(key(Key::SessionCapabilities));
     strings.set_session_none(key(Key::SessionNone));
+    strings.set_session_code_label(key(Key::SessionCodeLabel));
+    strings.set_session_code_input_hint(key(Key::SessionCodeInputHint));
+    strings.set_device_link_label(key(Key::DeviceLinkLabel));
+    strings.set_device_link_direct(key(Key::DeviceLinkDirect));
+    strings.set_device_link_relayed(key(Key::DeviceLinkRelayed));
+    strings.set_device_join_error(key(Key::DeviceJoinError));
+    strings.set_device_start_error(key(Key::DeviceStartError));
+    strings.set_device_session_failed(key(Key::DeviceSessionFailed));
 
     strings.set_action_connect(key(Key::ActionConnect));
     strings.set_action_disconnect(key(Key::ActionDisconnect));
+    strings.set_action_join(key(Key::ActionJoin));
     strings.set_action_send(key(Key::ActionSend));
-    strings.set_action_preview_start(key(Key::ActionPreviewStart));
-    strings.set_action_preview_stop(key(Key::ActionPreviewStop));
     strings.set_action_open_log_dir(key(Key::ActionOpenLogDir));
 
     strings.set_message_placeholder(key(Key::MessagePlaceholder));
     strings.set_messages_empty(key(Key::MessagesEmpty));
-
-    strings.set_preview_title(key(Key::PreviewTitle));
-    strings.set_preview_empty(key(Key::PreviewEmpty));
-    strings.set_preview_empty_hint(key(Key::PreviewEmptyHint));
-    strings.set_preview_disclaimer(key(Key::PreviewDisclaimer));
 
     strings.set_settings_title(key(Key::SettingsTitle));
     strings.set_settings_appearance(key(Key::SettingsAppearance));
@@ -187,6 +242,11 @@ pub fn apply_language(ui: &AppWindow, lang: Lang) {
         ui.set_peer_text(Key::SessionNone.text(lang).into());
         ui.set_channels_text(Key::SessionNone.text(lang).into());
         ui.set_capabilities_text(Key::SessionNone.text(lang).into());
+        ui.set_session_code_text("".into());
+        ui.set_link_text("".into());
+        ui.set_has_link(false);
+        ui.set_join_error_text("".into());
+        ui.set_busy(false);
     }
 }
 
@@ -206,6 +266,207 @@ pub fn apply_fonts(ui_font: UiFont, font: &ResolvedFont) {
     ui_font.set_weight(i32::from(font.weight));
 }
 
+// ────────────────────────────────────────────────────── 状态回投
+
+/// 在工作线程当前这一代上报一次状态。
+fn report(state: LinkState) {
+    let sender = REPORTER.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(sender) = sender.as_ref() {
+        let _ = sender.send(Update::Progress(state));
+    }
+}
+
+fn report_stopped(sender: &Sender<Update>, reason: String) {
+    let _ = sender.send(Update::Stopped { reason });
+}
+
+/// 界面这边收状态的通道，与 `REPORTER` 是一对。
+static STATUS_UPDATES: Mutex<Option<Receiver<Update>>> = Mutex::new(None);
+
+/// 在界面线程上装好状态定时器。必须在 `ui.run()` 之前调用。
+pub fn install_status_pump(ui: Weak<AppWindow>) {
+    let (sender, receiver) = channel::<Update>();
+    *STATUS_UPDATES.lock().unwrap_or_else(|e| e.into_inner()) = Some(receiver);
+    *REPORTER.lock().unwrap_or_else(|e| e.into_inner()) = Some(sender);
+
+    let timer = Rc::new(slint::Timer::default());
+    let running = timer.clone();
+    timer.start(
+        slint::TimerMode::Repeated,
+        STATUS_POLL_INTERVAL,
+        move || poll_status(&ui, &running),
+    );
+}
+
+/// 取走工作线程回投的状态并刷新界面。
+///
+/// `running` 是定时器自己的句柄：界面没了就停掉，不然定时器会一直空转。
+fn poll_status(ui: &Weak<AppWindow>, running: &Rc<slint::Timer>) {
+    let Some(ui) = ui.upgrade() else {
+        running.stop();
+        return;
+    };
+    let lang = Lang::default();
+
+    loop {
+        let update = {
+            let guard = STATUS_UPDATES.lock().unwrap_or_else(|e| e.into_inner());
+            match guard.as_ref() {
+                Some(receiver) => receiver.try_recv(),
+                None => return,
+            }
+        };
+        match update {
+            Err(std::sync::mpsc::TryRecvError::Empty)
+            | Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+            Ok(Update::Progress(state)) => apply_state(&ui, state, lang),
+            Ok(Update::Stopped { reason }) => {
+                if reason.is_empty() {
+                    ui.set_state_text(Key::DeviceStateDisconnected.text(lang).into());
+                } else {
+                    ui.set_state_text(
+                        Key::DeviceSessionFailed
+                            .format(lang, &[("reason", &reason)])
+                            .into(),
+                    );
+                }
+                ui.set_connected(false);
+                ui.set_busy(false);
+                ui.set_has_link(false);
+                ui.set_link_text("".into());
+                ui.set_peer_text(Key::SessionNone.text(lang).into());
+                ui.set_channels_text(Key::SessionNone.text(lang).into());
+                ui.set_capabilities_text(Key::SessionNone.text(lang).into());
+            }
+        }
+    }
+}
+
+/// 把一档状态刷到界面上。
+fn apply_state(ui: &AppWindow, state: LinkState, lang: Lang) {
+    let none = slint::SharedString::from(Key::SessionNone.text(lang));
+
+    match state {
+        LinkState::Connecting { detail } => {
+            ui.set_state_text(Key::SessionStateConnecting.text(lang).into());
+            ui.set_connected(false);
+            ui.set_busy(true);
+            ui.set_has_link(false);
+            ui.set_link_text(detail.into());
+            ui.set_peer_text(none);
+        }
+        LinkState::WaitingPeer { session_code } => {
+            ui.set_state_text(Key::DeviceStateWaitingPeer.text(lang).into());
+            ui.set_session_code_text(session_code.into());
+            ui.set_connected(false);
+            ui.set_busy(true);
+        }
+        LinkState::Ready {
+            session_code,
+            peer,
+            channels,
+            capabilities,
+            relayed,
+            via_relay_candidates,
+        } => {
+            ui.set_state_text(
+                if relayed {
+                    Key::DeviceStateConnectedRelayed.text(lang)
+                } else {
+                    Key::DeviceStateConnectedDirect.text(lang)
+                }
+                .into(),
+            );
+            ui.set_session_code_text(session_code.into());
+            ui.set_peer_text(peer.into());
+            ui.set_channels_text(channels_text(&channels, lang).into());
+            ui.set_capabilities_text(
+                if capabilities.is_empty() {
+                    none
+                } else {
+                    capabilities.join(", ").into()
+                },
+            );
+            ui.set_link_text(
+                if relayed {
+                    Key::DeviceLinkRelayed.text(lang)
+                } else {
+                    Key::DeviceLinkDirect.text(lang)
+                }
+                .into(),
+            );
+            ui.set_has_link(true);
+            ui.set_connected(true);
+            ui.set_busy(false);
+            tracing::info!(
+                target: "session",
+                relayed,
+                via_relay_candidates,
+                "界面已显示连接结果"
+            );
+        }
+    }
+}
+
+/// 进度 → 界面状态。
+fn state_of(progress: &Progress) -> Option<LinkState> {
+    let state = match progress {
+        Progress::Discovering => LinkState::Connecting {
+            detail: "从中继取配置".to_string(),
+        },
+        Progress::Discovered { .. } => LinkState::Connecting {
+            detail: "已取到配置".to_string(),
+        },
+        Progress::Signaling => LinkState::Connecting {
+            detail: "正在连信令".to_string(),
+        },
+        Progress::SessionReady { session_code, role } => LinkState::WaitingPeer {
+            session_code: format!("{session_code}（{}）", role.label()),
+        },
+        Progress::PeerJoined { .. } => LinkState::Connecting {
+            detail: "对端已进入会话".to_string(),
+        },
+        Progress::Connecting { kind } => LinkState::Connecting {
+            detail: kind.label().to_string(),
+        },
+        Progress::FallbackToRelay { reason } => LinkState::Connecting {
+            detail: format!("直连失败（{reason}），改用中继候选"),
+        },
+        // 已连接与失败都有专门的回投路径，这里不重复处理
+        Progress::Connected { .. } | Progress::Failed { .. } | Progress::Cancelled => return None,
+    };
+    Some(state)
+}
+
+/// 日志里记一条进度；状态本身由 `report` 出去。
+fn log_progress(progress: &Progress) {
+    match progress {
+        Progress::SessionReady { session_code, role } => tracing::info!(
+            target: "session",
+            session_code = %session_code,
+            role = role.label(),
+            "会话码已就绪"
+        ),
+        Progress::PeerJoined { peer_id } => tracing::info!(
+            target: "session",
+            peer = %peer_id,
+            "对端已进入会话"
+        ),
+        Progress::Connected { kind, relayed } => tracing::info!(
+            target: "session",
+            attempt = kind.label(),
+            relayed,
+            "建连完成"
+        ),
+        Progress::Failed { reason } => {
+            tracing::warn!(target: "session", "建连失败：{reason}")
+        }
+        Progress::FallbackToRelay { reason } => {
+            tracing::warn!(target: "session", "直连失败，回退中继：{reason}")
+        }
+        other => tracing::debug!(target: "session", "进度：{other:?}"),
+    }
+}
 
 // ────────────────────────────────────────────────────── 日志目录
 
@@ -271,47 +532,6 @@ fn clear_messages(ui: &Weak<AppWindow>) {
     publish_messages(ui);
 }
 
-// ────────────────────────────────────────────────────── UI 更新小工具
-
-fn set_state(ui: &Weak<AppWindow>, text: &str) {
-    let ui = ui.clone();
-    let value: slint::SharedString = text.into();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(ui) = ui.upgrade() {
-            ui.set_state_text(value);
-        }
-    });
-}
-
-enum Field {
-    Peer,
-    Channels,
-    Capabilities,
-}
-
-fn set_field(ui: &Weak<AppWindow>, field: Field, value: String) {
-    let ui = ui.clone();
-    let value: slint::SharedString = value.into();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(ui) = ui.upgrade() {
-            match field {
-                Field::Peer => ui.set_peer_text(value),
-                Field::Channels => ui.set_channels_text(value),
-                Field::Capabilities => ui.set_capabilities_text(value),
-            }
-        }
-    });
-}
-
-fn set_connected_flag(ui: &Weak<AppWindow>, value: bool) {
-    let ui = ui.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(ui) = ui.upgrade() {
-            ui.set_connected(value);
-        }
-    });
-}
-
 // ────────────────────────────────────────────────────── 频道展示
 
 /// 频道名（用于 UI 展示）。
@@ -335,20 +555,65 @@ pub fn channels_text(channels: &[Channel], lang: Lang) -> String {
         .join(" / ")
 }
 
-// ────────────────────────────────────────────────────── 会话
+// ────────────────────────────────────────────────────── 建连与收发
 
-/// 是否已有活跃会话。
-pub fn is_connected() -> bool {
-    CONNECTED.load(Ordering::SeqCst)
+/// 是否已有活跃会话（含正在建连）。
+pub fn is_active() -> bool {
+    ACTIVE.load(Ordering::SeqCst)
 }
 
-/// 请求断开当前会话。
+/// 是否已经连上。
+pub fn is_connected() -> bool {
+    is_active() && current().is_some()
+}
+
+/// 会话码的形态校验：八位十六进制。与建连层的判定一致，界面先挡一道好给提示。
+pub fn session_code_valid(code: &str) -> bool {
+    let code = code.trim();
+    code.len() == 8 && code.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// 界面上的按钮该显示什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectAction {
+    /// 本机生成会话码，等对端加入。
+    Offer,
+    /// 加入对端给出的会话码。
+    Join,
+    /// 正在建连或已连接，按钮是"断开"。
+    Disconnect,
+}
+
+/// 按当前会话码输入框的内容决定按钮语义。
+pub fn connect_action(session_code: &str) -> ConnectAction {
+    if is_active() {
+        return ConnectAction::Disconnect;
+    }
+    if session_code.trim().is_empty() {
+        ConnectAction::Offer
+    } else {
+        ConnectAction::Join
+    }
+}
+
+/// 断开当前会话（含"正在建连"时取消）。
 pub fn request_disconnect() {
-    if !CONNECTED.swap(false, Ordering::SeqCst) {
+    if !ACTIVE.swap(false, Ordering::SeqCst) {
         return;
     }
-    // 丢弃发件箱会让会话线程的 `recv` 返回 None，从而退出循环。
+
+    // 丢掉发件箱会让收发循环的 `recv` 返回 None，从而退出循环。
     *OUTBOX.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+    // 会话线程会自己收尾；这里只负责让它停下来。
+    let connector = CONNECTOR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .map(|(_, connector)| connector);
+    if let Some(connector) = connector {
+        connector.cancel();
+    }
 }
 
 /// UI 点击"发送"时调用。
@@ -360,19 +625,66 @@ pub fn send_text(text: String) -> bool {
     }
 }
 
-/// 启动一次 M0 演示会话。
-pub fn spawn_demo_session(ui: Weak<AppWindow>, lang: Lang) {
-    if CONNECTED.swap(true, Ordering::SeqCst) {
-        return; // 已经在会话中
+/// 发起一次建连。
+///
+/// `session_code` 为空时本机新建会话并等对端加入（发起方），非空时加入该会话（应答方）。
+/// `endpoint` 是用户选中的中继基址。
+pub fn start_session(
+    ui: &AppWindow,
+    lang: Lang,
+    endpoint: &str,
+    bind: &[String],
+    session_code: &str,
+) -> Result<(), String> {
+    if ACTIVE.swap(true, Ordering::SeqCst) {
+        return Err("已有会话在跑".to_string());
     }
+
+    let reporter = REPORTER
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or_else(|| "状态通道还没装好".to_string())?;
+
+    let endpoint = endpoint.trim().to_string();
+    if endpoint.is_empty() {
+        ACTIVE.store(false, Ordering::SeqCst);
+        return Err("还没选中继".to_string());
+    }
+
+    let generation = GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let peer_id = local_peer_id();
+    let options = {
+        let options = ConnectOptions::new(endpoint.clone(), peer_id.clone())
+            .with_device_id(DeviceId::new(peer_id.clone()).expect("本机 ID 合法"))
+            .with_bind(bind.to_vec());
+        if session_code.trim().is_empty() {
+            options.as_offerer()
+        } else {
+            options.joining(session_code.trim())
+        }
+    };
+
+    let connector = Arc::new(Connector::new(options));
+    *CONNECTOR.lock().unwrap_or_else(|e| e.into_inner()) = Some((generation, connector.clone()));
 
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     *OUTBOX.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
+    *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
-    clear_messages(&ui);
-    set_state(&ui, Key::SessionStateConnecting.text(lang));
-    tracing::info!(target: "session", "M0 演示会话启动（进程内回环，非真实 P2P）");
+    clear_messages(&ui.as_weak());
+    ui.set_join_error_text("".into());
 
+    tracing::info!(
+        target: "session",
+        endpoint = %endpoint,
+        session_code = %session_code.trim(),
+        peer_id = %peer_id,
+        bind = ?bind,
+        "开始建连"
+    );
+
+    let weak = ui.as_weak();
     std::thread::spawn(move || {
         let runtime = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -380,68 +692,109 @@ pub fn spawn_demo_session(ui: Weak<AppWindow>, lang: Lang) {
         {
             Ok(runtime) => runtime,
             Err(err) => {
-                tracing::error!(target: "session", "创建 tokio 运行时失败：{err}");
-                CONNECTED.store(false, Ordering::SeqCst);
-                set_state(&ui, Key::SessionStateClosed.text(lang));
+                ACTIVE.store(false, Ordering::SeqCst);
+                release(generation);
+                report_stopped(&reporter, format!("创建 tokio 运行时失败：{err}"));
                 return;
             }
         };
-
-        runtime.block_on(run_demo_session(ui, lang, rx));
+        runtime.block_on(run_session(weak, lang, generation, connector, rx, reporter));
     });
+
+    Ok(())
 }
 
-async fn run_demo_session(
+/// 只清掉本代留下的全局引用。
+fn release(generation: u64) {
+    let guard = CONNECTOR.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.as_ref().map(|(id, _)| *id) == Some(generation) {
+        drop(guard);
+        *CONNECTOR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+/// 一条会话线程的完整生命周期：建连 → 收发 → 收尾。
+async fn run_session(
     ui: Weak<AppWindow>,
     lang: Lang,
+    generation: u64,
+    connector: Arc<Connector>,
     mut outbox: tokio::sync::mpsc::UnboundedReceiver<String>,
+    reporter: Sender<Update>,
 ) {
-    // M0：两个 Session 通过进程内回环直连。真实 P2P 接入后这里换成 ICE 打洞。
-    let (transport_a, transport_b) = loopback_pair();
-    let mut local = Session::new(
-        transport_a,
-        SessionConfig::new(DeviceId::new("dev-local-a").expect("固定设备 ID 合法")),
-    );
-    let mut peer = Session::new(
-        transport_b,
-        SessionConfig::new(DeviceId::new("dev-local-b").expect("固定设备 ID 合法")),
-    );
+    // 建连与进度上报并行：发起方会在等对端加入时卡住，会话码必须在那之前送到界面上。
+    let mut feed = connector.subscribe();
+    let connect = connector.connect();
+    let watch = async {
+        while let Some(progress) = feed.changed().await {
+            log_progress(&progress);
+            if let Some(state) = state_of(&progress) {
+                report(state);
+            }
+            if matches!(
+                progress,
+                Progress::Connected { .. } | Progress::Failed { .. } | Progress::Cancelled
+            ) {
+                break;
+            }
+        }
+    };
+    let (result, ()) = tokio::join!(connect, watch);
 
-    let (local_result, peer_result) = tokio::join!(local.connect(), peer.accept());
-    let peer_info = match (local_result, peer_result) {
-        (Ok(info), Ok(_)) => info,
-        (Err(err), _) | (_, Err(err)) => {
-            tracing::error!(target: "session", "握手失败：{err}");
-            set_state(&ui, Key::SessionStateClosed.text(lang));
-            set_connected_flag(&ui, false);
-            CONNECTED.store(false, Ordering::SeqCst);
+    let mut connection = match result {
+        Ok(connection) => connection,
+        Err(error) => {
+            tracing::warn!(target: "session", "建连没有成功：{error}");
+            *OUTBOX.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            ACTIVE.store(false, Ordering::SeqCst);
+            release(generation);
+            if !error.is_cancelled() {
+                report_stopped(&reporter, error.reason());
+            }
             return;
         }
     };
 
+    // 会话已建好：先摘一份界面要的值，再把连接挪进全局，界面线程才点的动"断开"
+    let Some(peer) = connection.peer().cloned() else {
+        let _ = connection.close("握手没有留下对端信息").await;
+        *OUTBOX.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        ACTIVE.store(false, Ordering::SeqCst);
+        release(generation);
+        report_stopped(&reporter, "握手没有留下对端信息".to_string());
+        return;
+    };
+    let summary = Current {
+        session_code: connection.session_code().to_string(),
+        peer,
+        relayed: connection.is_relayed(),
+        via_relay_candidates: connection.connected().kind
+            == secrelay_connection::AttemptKind::RelayOnly,
+    };
+    *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = Some(summary.clone());
+
     tracing::info!(
         target: "session",
-        peer = %peer_info.device_id,
-        channels = ?peer_info.channels,
-        "握手完成"
+        session_code = %summary.session_code,
+        peer = %summary.peer.device_id,
+        relayed = summary.relayed,
+        via_relay_candidates = summary.via_relay_candidates,
+        "会话已就绪，进入收发"
     );
 
-    set_field(&ui, Field::Peer, peer_info.device_id.to_string());
-    set_field(&ui, Field::Channels, channels_text(&peer_info.channels, lang));
-    set_field(
-        &ui,
-        Field::Capabilities,
-        if peer_info.capabilities.is_empty() {
-            Key::SessionNone.text(lang).to_string()
-        } else {
-            peer_info.capabilities.join(", ")
-        },
-    );
-    set_state(&ui, Key::SessionStateReady.text(lang));
-    set_connected_flag(&ui, true);
+    report(LinkState::Ready {
+        session_code: summary.session_code.clone(),
+        peer: summary.peer.device_id.to_string(),
+        channels: summary.peer.channels.clone(),
+        capabilities: summary.peer.capabilities.clone(),
+        relayed: summary.relayed,
+        via_relay_candidates: summary.via_relay_candidates,
+    });
 
+    // ── 收发循环
+    let mut stop_reason = String::new();
     loop {
-        if !CONNECTED.load(Ordering::SeqCst) {
+        if !ACTIVE.load(Ordering::SeqCst) {
             break;
         }
 
@@ -451,192 +804,62 @@ async fn run_demo_session(
             if text.is_empty() {
                 continue;
             }
-            if let Err(err) = local
+            if let Err(err) = connection
+                .session_mut()
                 .send_control(ControlMessage::Text { body: text.clone() })
                 .await
             {
                 tracing::warn!(target: "session", "发送失败：{err}");
+                let text = Key::LogSendFailed.format(lang, &[("detail", &err.to_string())]);
+                push_message(&ui, text, false);
                 continue;
             }
-            push_message(&ui, text.clone(), true);
-
-            // 让对端真正收下这条消息，演示双向链路
-            match peer.next_event().await {
-                Ok(SessionEvent::Control(ControlMessage::Text { body })) => {
-                    push_message(&ui, body, false);
-                }
-                Ok(SessionEvent::PeerClosed) => {
-                    tracing::info!(target: "session", "对端已关闭会话");
-                    CONNECTED.store(false, Ordering::SeqCst);
-                    break;
-                }
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::error!(target: "session", "接收消息失败：{err}");
-                    CONNECTED.store(false, Ordering::SeqCst);
-                    break;
-                }
-            }
+            tracing::info!(target: "session", bytes = text.len(), "已发送一条文字消息");
+            push_message(&ui, text, true);
         }
 
-        // 再看本端有没有事件（心跳由会话层自动处理，不会冒泡到这里）
-        match tokio::time::timeout(OUTBOX_POLL_INTERVAL, local.next_event()).await {
-            Err(_) => continue, // 没有事件，回到循环再检查发件箱
+        match tokio::time::timeout(
+            OUTBOX_POLL_INTERVAL,
+            connection.session_mut().next_event(),
+        )
+        .await
+        {
+            Err(_) => continue,
+            Ok(Ok(SessionEvent::Control(ControlMessage::Text { body }))) => {
+                tracing::info!(target: "session", bytes = body.len(), "收到一条文字消息");
+                push_message(&ui, body, false);
+            }
             Ok(Ok(SessionEvent::PeerClosed)) => {
-                tracing::info!(target: "session", "对端已断开");
+                tracing::info!(target: "session", "对端已关闭会话");
                 break;
             }
             Ok(Ok(_)) => {}
             Ok(Err(err)) => {
+                stop_reason = err.to_string();
                 tracing::error!(target: "session", "会话错误：{err}");
                 break;
             }
         }
     }
 
-    let _ = local.close("界面主动断开").await;
-    set_state(&ui, Key::SessionStateClosed.text(lang));
-    set_connected_flag(&ui, false);
-    CONNECTED.store(false, Ordering::SeqCst);
+    let _ = connection.close("界面主动断开").await;
+
+    // 清掉摘要，否则界面会把一次已经结束的会话当成活跃会话
+    {
+        let mut guard = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
     *OUTBOX.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    ACTIVE.store(false, Ordering::SeqCst);
+    release(generation);
+
+    report_stopped(&reporter, stop_reason);
     tracing::info!(target: "session", "会话已结束");
 }
 
-// ────────────────────────────────────────────────────── 本机画面预览
-
-/// 预览是否在跑。
-pub fn is_previewing() -> bool {
-    PREVIEWING.load(Ordering::SeqCst)
-}
-
-fn set_previewing(ui: &Weak<AppWindow>, value: bool) {
-    let ui = ui.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(ui) = ui.upgrade() {
-            ui.set_previewing(value);
-            if !value {
-                ui.set_preview_stats("".into());
-            }
-        }
-    });
-}
-
-/// 停止预览。
-pub fn stop_preview() {
-    PREVIEWING.store(false, Ordering::SeqCst);
-}
-
-/// 启动本机画面预览：把采集到的桌面画面直接回显到界面上。
-///
-/// # 这是 M0 探针，不是产品功能
-///
-/// 它**不做编码、不走网络、不是远程画面**，唯一目的是把"采集 → 像素转换 → 界面显示"
-/// 这条链路跑通，并量出 CPU 拷贝路径的真实开销。界面上有对应文案说明这一点。
-pub fn start_preview(ui: Weak<AppWindow>, lang: Lang) {
-    if PREVIEWING.swap(true, Ordering::SeqCst) {
-        return; // 已经在预览
-    }
-    set_previewing(&ui, true);
-
-    std::thread::spawn(move || {
-        let mut source = match secrelay_media::open_default_source() {
-            Ok(source) => source,
-            Err(err) => {
-                tracing::error!(target: "preview", "打开采集源失败：{err}");
-                PREVIEWING.store(false, Ordering::SeqCst);
-                set_previewing(&ui, false);
-                return;
-            }
-        };
-
-        tracing::info!(target: "preview", source = %source.description(), "本机画面预览启动");
-
-        let mut last_push = Instant::now();
-        let mut previous: Option<secrelay_media::VideoFrame> = None;
-        let mut frames_in_window: u64 = 0;
-        let mut window_start = Instant::now();
-        let mut fps: f64 = 0.0;
-
-        while PREVIEWING.load(Ordering::SeqCst) {
-            let frame = match source.next_frame(Duration::from_millis(200)) {
-                Ok(Some(frame)) => frame,
-                // 桌面没变化：正常现象，继续等。
-                Ok(None) => continue,
-                Err(CaptureError::Timeout(_)) => continue,
-                Err(err) => {
-                    tracing::error!(target: "preview", "采集失败：{err}");
-                    break;
-                }
-            };
-
-            // 限流：CPU 拷贝路径下跑到采集帧率会吃掉一个多核心。
-            if last_push.elapsed() < PREVIEW_MIN_INTERVAL {
-                continue;
-            }
-            last_push = Instant::now();
-
-            let change = previous
-                .as_ref()
-                .map(|prev| prev.diff_ratio(&frame))
-                .unwrap_or(0.0);
-            previous = Some(frame.clone());
-
-            let scale = scale_for_width(frame.width, PREVIEW_TARGET_WIDTH);
-            let image = match to_rgba_scaled(&frame, scale) {
-                Ok(image) => image,
-                Err(err) => {
-                    tracing::error!(target: "preview", "像素转换失败：{err}");
-                    break;
-                }
-            };
-
-            frames_in_window += 1;
-            let elapsed = window_start.elapsed();
-            if elapsed >= Duration::from_secs(1) {
-                fps = frames_in_window as f64 / elapsed.as_secs_f64();
-                frames_in_window = 0;
-                window_start = Instant::now();
-            }
-
-            let stats = format!(
-                "{}   {}   {}",
-                Key::StatsFps.format(lang, &[("fps", &format!("{fps:.0}"))]),
-                Key::StatsSize.format(
-                    lang,
-                    &[
-                        ("width", &image.width.to_string()),
-                        ("height", &image.height.to_string()),
-                    ],
-                ),
-                Key::StatsChange.format(lang, &[("ratio", &format!("{:.2}", change * 100.0))]),
-            );
-
-            push_preview(&ui, image, stats);
-        }
-
-        PREVIEWING.store(false, Ordering::SeqCst);
-        set_previewing(&ui, false);
-        tracing::info!(target: "preview", "本机画面预览停止");
-    });
-}
-
-/// 把一帧画面推给 UI。
-///
-/// 这里是 CPU 路径的关键开销点：`clone_from_slice` 会把 RGBA 缓冲**再拷一份**
-/// 交给 Slint，然后由渲染后端上传。这就是为什么预览要限流 + 降采样。
-fn push_preview(ui: &Weak<AppWindow>, image: RgbaImage, stats: String) {
-    let ui = ui.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(ui) = ui.upgrade() {
-            let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                &image.data,
-                image.width,
-                image.height,
-            );
-            ui.set_preview(slint::Image::from_rgba8(buffer));
-            ui.set_preview_stats(stats.into());
-        }
-    });
+/// 本机在信令里的匿名身份。只在本次进程内有意义。
+fn local_peer_id() -> String {
+    format!("secrelay-desktop-{}", std::process::id())
 }
 
 #[cfg(test)]
@@ -661,7 +884,7 @@ mod tests {
     #[test]
     fn 未连接时发消息失败而不是崩溃() {
         *OUTBOX.lock().unwrap() = None;
-        CONNECTED.store(false, Ordering::SeqCst);
+        ACTIVE.store(false, Ordering::SeqCst);
         assert!(!send_text("测试".into()));
     }
 
@@ -671,5 +894,50 @@ mod tests {
         let text = dir.to_string_lossy().to_lowercase();
         assert!(text.contains("secrelay"), "实际：{text}");
         assert!(text.ends_with("logs"), "实际：{text}");
+    }
+
+    #[test]
+    fn 会话码校验与建连层一致() {
+        assert!(session_code_valid("ab12cd34"));
+        assert!(session_code_valid("  AB12CD34 "));
+        for bad in ["", "abc", "abcd1234z", "1234567890"] {
+            assert!(!session_code_valid(bad), "{bad} 应当被拒");
+        }
+    }
+
+    #[test]
+    fn 按钮语义跟着输入框走() {
+        ACTIVE.store(false, Ordering::SeqCst);
+        assert_eq!(connect_action(""), ConnectAction::Offer);
+        assert_eq!(connect_action("   "), ConnectAction::Offer);
+        assert_eq!(connect_action("ab12cd34"), ConnectAction::Join);
+    }
+
+    #[test]
+    fn 直连与经服务端转发是两档不同的文案() {
+        let direct = Key::DeviceStateConnectedDirect.text(Lang::ZhHans);
+        let relayed = Key::DeviceStateConnectedRelayed.text(Lang::ZhHans);
+        assert_ne!(direct, relayed);
+        assert!(direct.contains("直连"), "{direct}");
+        assert!(relayed.contains("转发"), "{relayed}");
+    }
+
+    #[test]
+    fn 失败状态带上原因() {
+        let text = Key::DeviceSessionFailed.format(Lang::ZhHans, &[("reason", "连接信令失败")]);
+        assert!(text.contains("连接信令失败"), "{text}");
+    }
+
+    #[test]
+    fn 连上之前不显示已连接() {
+        ACTIVE.store(false, Ordering::SeqCst);
+        *CURRENT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        assert!(!is_connected());
+
+        ACTIVE.store(true, Ordering::SeqCst);
+        assert!(is_active(), "建连中也算活跃，按钮要能取消");
+        assert!(!is_connected(), "还没连上就不能显示已连接");
+
+        ACTIVE.store(false, Ordering::SeqCst);
     }
 }

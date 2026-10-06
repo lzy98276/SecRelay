@@ -1393,14 +1393,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fake-relay"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "sha1",
-]
-
-[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4777,7 +4769,6 @@ name = "secrelay-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "secrelay-media",
  "secrelay-protocol",
  "secrelay-session",
  "secrelay-transport",
@@ -4787,12 +4778,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrelay-connection"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "secrelay-protocol",
+ "secrelay-relay-client",
+ "secrelay-session",
+ "secrelay-transport",
+ "serde_json",
+ "sha1",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "secrelay-desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "secrelay-connection",
  "secrelay-i18n",
- "secrelay-media",
  "secrelay-protocol",
  "secrelay-relay-client",
  "secrelay-session",
@@ -4809,15 +4818,6 @@ dependencies = [
 [[package]]
 name = "secrelay-i18n"
 version = "0.1.0"
-
-[[package]]
-name = "secrelay-media"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.21",
- "tracing",
- "windows",
-]
 
 [[package]]
 name = "secrelay-protocol"

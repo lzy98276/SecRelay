@@ -1,6 +1,6 @@
 [package]
 name = "secrelay-cli"
-description = "SecRelay 命令行工具：M0 技术探针与自检"
+description = "SecRelay 命令行工具：协议与会话自检"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,7 +16,6 @@ path = "src/main.rs"
 secrelay-protocol.workspace = true
 secrelay-transport.workspace = true
 secrelay-session.workspace = true
-secrelay-media.workspace = true
 tokio = { workspace = true }
 tracing.workspace = true
 tracing-subscriber.workspace = true
