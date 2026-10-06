@@ -8,3 +8,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+# 枚举系统已安装字体及其字重。选它是因为纯 Rust、跨平台，
+# 而且能给出**每个族实际有哪些字重** —— 没有这个信息就没法避免"合成假粗体"。
+fontdb = "0.24"

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>SecRelay</title>
+
+  <!--
+    SecRelay 图标定稿。
+    与 SecRandom（随机点名）同属一套视觉语言：同款纯白/透明底、同款主蓝与浅蓝、
+    同款扁平无描边、同款"一个强调符号压在右下并溢出主体"、同款柔和投影。
+
+    几何旋钮（改这几个数就能调形体，不要手改路径点）：
+      机身长     126   —— 机头 (167,160) 沿 25° 航向向后
+      翼展       120   —— 后缘是完整直线，横跨 A(78,52) 到 B(27,161)
+      翼展角     25°   —— 航向俯冲角
+      缺口切深   30%   —— 楔形缺口尖端到机头的距离 / 机身长
+      缺口宽度   18%   —— 缺口占后缘的比例（越窄两翼越贴合，缺口越含蓄）
+    关键：缺口是【窄而深的楔形】，不是把整条后缘收成一个 V。
+    收成 V 的话两翼会变成细条，整架飞机读起来像飞镖（这是本项目返工最多的一处）。
+  -->
+  <defs>
+    <filter id="secrelay-shape-shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0B4A8C" flood-opacity="0.18"/>
+    </filter>
+    <filter id="secrelay-arrow-shadow" x="-60%" y="-60%" width="220%" height="220%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0B4A8C" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+
+  <!-- 纸飞机：两个折面分远近，折角磨圆（圆头描边）做出纸张厚度 -->
+  <g filter="url(#secrelay-shape-shadow)">
+    <path d="M167,160 L78,52 L57,97 L133,144 Z"
+          fill="#78BAE6" stroke="#78BAE6" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M167,160 L133,144 L48,116 L27,161 Z"
+          fill="#127AD2" stroke="#127AD2" stroke-width="7" stroke-linejoin="round"/>
+  </g>
+
+  <!-- 连接：独立在机头右下方的单弧箭头。弧线不能接到机头上，否则看着像从机头射出来的 -->
+  <g filter="url(#secrelay-arrow-shadow)">
+    <path d="M173,197 C197,201 210,183 217,174"
+          fill="none" stroke="#F2A33C" stroke-width="16" stroke-linecap="round"/>
+    <path d="M233,153 L229.6,183.8 L204.4,164.2 Z" fill="#F2A33C"/>
+  </g>
+</svg>

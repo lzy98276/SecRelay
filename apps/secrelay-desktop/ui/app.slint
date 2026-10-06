@@ -19,6 +19,12 @@ import { Icons } from "icons.slint";
 // family 名必须与字体内部一致（可用 `cargo run -p gen-icons` 查出来）。
 import "../../../assets/fonts/FluentSystemIcons-Resizable.ttf";
 
+// miSans 界面字体。**注意：这两个文件是各自独立的 family，不是同族的两个权重** ——
+// Regular 的 family 是 "MiSans"，Demibold 的是 "MiSans Demibold"。
+// 所以粗体必须靠切换 family 实现，光写 font-weight 是挑不到的（见 secrelay-theme::font）。
+import "../../../assets/fonts/MiSans/MiSans-Regular.ttf";
+import "../../../assets/fonts/MiSans/MiSans-Demibold.ttf";
+
 // ───────────────────────────────────────────── 颜色令牌
 //
 // **全部是 in-out**：值由 Rust 按当前主题模式注入。
@@ -39,6 +45,17 @@ export global Theme {
     in-out property <color> accent: #0078d4;
     in-out property <color> accent-soft: #102c43;
     in-out property <color> on-accent: #0b0c10;
+
+    // 界面字体族。由 Rust 按用户的字体选择注入，默认 miSans（随应用分发）。
+    // 分成"常规"和"粗体"两个是因为 miSans 的 Demibold 是独立 family，
+    // 不能用 font-weight 挑（系统字体则两者相同，靠 font-weight 生效）。
+    in-out property <string> ui-font: "MiSans";
+    in-out property <string> ui-font-bold: "MiSans Demibold";
+    // 字重（100-900）。常规文字用 ui-weight，强调文字用 ui-weight-bold。
+    // 具体取哪个值由 Rust 按"所选字体实际提供的字重"算出来（见 secrelay-theme::fonts），
+    // 避免渲染器去合成假粗体。
+    in-out property <int> ui-weight: 400;
+    in-out property <int> ui-weight-bold: 600;
 
     out property <length> radius: 8px;
     out property <length> pad: 22px;
@@ -90,16 +107,29 @@ export global Strings {
     in property <string> preview-disclaimer: "";
 
     in property <string> settings-title: "";
+    in property <string> settings-appearance: "";
+    in property <string> settings-about: "";
+    in property <string> about-fonts: "";
+    in property <string> about-misans: "";
+    in property <string> about-fluent-icons: "";
+    in property <string> about-license-hint: "";
     in property <string> settings-language: "";
     in property <string> settings-language-hint: "";
     in property <string> settings-theme: "";
     in property <string> settings-theme-hint: "";
+    in property <string> settings-font: "";
+    in property <string> settings-font-hint: "";
+    in property <string> settings-font-family: "";
+    in property <string> settings-font-weight: "";
     in property <string> settings-diagnostics: "";
     in property <string> settings-log-dir-hint: "";
 
     in property <string> theme-follow-system: "";
     in property <string> theme-light: "";
     in property <string> theme-dark: "";
+
+    in property <string> font-system: "";
+    in property <string> font-misans: "";
 
     in property <string> account-title: "";
     in property <string> account-not-logged-in: "";
@@ -222,6 +252,105 @@ component SegmentedOption inherits Rectangle {
     }
 }
 
+/** 下拉选择框。
+ *
+ *  没用 std-widgets 的 ComboBox：它按 Slint 内置样式配色，和我们的深/浅色主题不搭。
+ *  这里用 PopupWindow 自己搭，颜色全部走 Theme。
+ *
+ *  注意 PopupWindow 的限制：外部不能访问弹层**内部**元素的属性（Slint #4438），
+ *  所以展开状态靠 `is-open` 从弹层往上报。 */
+component Dropdown inherits Rectangle {
+    in property <[string]> model: [];
+    in-out property <int> current-index: 0;
+    callback selected(int);
+
+    height: 36px;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: popup.is-open ? Theme.accent : Theme.border;
+    background: Theme.surface-hi;
+
+    ta := TouchArea {
+        clicked => {
+            if popup.is-open {
+                popup.close();
+            } else {
+                popup.show();
+            }
+        }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        Text {
+            text: root.current-index >= 0 && root.current-index < root.model.length
+                ? root.model[root.current-index]
+                : "";
+            color: Theme.text;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Icon {
+            glyph: Icons.chevron_down;
+            size: 14px;
+            tint: popup.is-open ? Theme.accent : Theme.text-dim;
+        }
+    }
+
+    popup := PopupWindow {
+        x: 0;
+        y: root.height + 4px;
+        width: max(root.width, 160px);
+        height: min(280px, root.model.length * 28px + 12px);
+
+        Rectangle {
+            background: Theme.surface;
+            border-radius: 8px;
+            border-width: 1px;
+            border-color: Theme.border;
+            clip: true;
+
+            ScrollView {
+                VerticalLayout {
+                    padding: 5px;
+                    spacing: 2px;
+                    // ScrollView 里必须显式 start，否则子项会被拉伸填满
+                    alignment: start;
+
+                    for item[index] in root.model : Rectangle {
+                        height: 26px;
+                        border-radius: 4px;
+                        background: index == root.current-index
+                            ? Theme.accent-soft
+                            : (hover.has-hover ? Theme.surface-hi : transparent);
+
+                        hover := TouchArea {
+                            clicked => {
+                                root.selected(index);
+                                popup.close();
+                            }
+                        }
+                        Text {
+                            text: item;
+                            color: index == root.current-index ? Theme.accent : Theme.text-dim;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                            x: 10px;
+                            width: max(0px, parent.width - 20px);
+                            overflow: elide;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 component NavItem inherits Rectangle {
     in property <string> label: "";
     in property <string> glyph: "";
@@ -325,7 +454,8 @@ component NavGroupLabel inherits Rectangle {
             text: root.text;
             color: Theme.text-faint;
             font-size: 10px;
-            font-weight: 600;
+            font-family: Theme.ui-font-bold;
+            font-weight: Theme.ui-weight-bold;
             vertical-alignment: bottom;
         }
     }
@@ -348,7 +478,8 @@ component PageHeader inherits HorizontalLayout {
         text: root.title;
         color: Theme.text;
         font-size: 19px;
-        font-weight: 600;
+        font-family: Theme.ui-font-bold;
+        font-weight: Theme.ui-weight-bold;
         vertical-alignment: center;
     }
     Text {
@@ -375,7 +506,8 @@ component SectionTitle inherits HorizontalLayout {
         text: root.title;
         color: Theme.text;
         font-size: 13px;
-        font-weight: 600;
+        font-family: Theme.ui-font-bold;
+        font-weight: Theme.ui-weight-bold;
         vertical-alignment: center;
     }
     // 尾部撑开，保证标题靠左（否则会被拉伸后居中）
@@ -740,164 +872,390 @@ component MessagesPage inherits VerticalLayout {
 }
 
 // ───────────────────────────────────────────── 设置（独立窗口）
+//
+// 与主窗口**同样的尺寸与骨架**：左侧是设置分区导航，右侧是当前分区的内容。
+// 保持一致的尺寸与导航宽度，是为了让"从主窗口打开设置"不产生窗口跳变感。
 export component SettingsWindow inherits Window {
-    title: Strings.settings-title;
-    width: 560px;
-    height: 580px;
+    // 窗口标题**始终**用软件名，与主窗口一致 —— 标题栏是应用身份，不是页面名。
+    // 当前在哪个分区由侧边栏的选中态表达。
+    title: Strings.app-title;
+    width: 1140px;
+    height: 760px;
     background: Theme.bg;
-    default-font-family: "Microsoft YaHei";
+    default-font-family: Theme.ui-font;
+    default-font-weight: Theme.ui-weight;
 
+    /// 当前设置分区：0 外观 / 1 语言 / 2 诊断 / 3 关于。
+    in-out property <int> settings-page: 0;
     /// 当前主题模式：0 跟随系统 / 1 浅色 / 2 深色。
     in property <int> theme-mode: 0;
+    /// 可选字体列表（由 Rust 从系统字体目录填入，内置 miSans 在第一位）。
+    in property <[string]> families: [];
+    /// 可选字重列表（随所选字体变化）。
+    in property <[string]> weights: [];
+    in property <int> family-index: 0;
+    in property <int> weight-index: 0;
     in property <string> language-name: "";
     in property <string> log-dir: "";
+    /// 版本号，显示在「关于」页标题右侧。
+    in property <string> version: "";
 
     callback theme-mode-changed(int);
+    callback family-selected(int);
+    callback weight-selected(int);
     callback open-log-dir-clicked();
     callback close-clicked();
 
-    VerticalLayout {
-        padding: Theme.pad;
-        spacing: 14px;
-
-        PageHeader {
-            title: Strings.settings-title;
-            glyph: Icons.settings;
-        }
-
-        // ── 主题
-        Card {
-            height: 124px;
+    HorizontalLayout {
+        // ══ 左：设置分区导航
+        Rectangle {
+            width: Theme.nav-width;
+            background: Theme.nav;
             VerticalLayout {
-                padding: 16px;
-                spacing: 10px;
+                padding: 14px;
+                spacing: 4px;
 
-                SectionTitle {
-                    glyph: Icons.settings;
-                    title: Strings.settings-theme;
-                }
-
-                Rectangle {
-                    height: 38px;
-                    background: Theme.surface-hi;
-                    border-radius: 8px;
-                    HorizontalLayout {
-                        padding: 4px;
-                        spacing: 4px;
-                        SegmentedOption {
-                            label: Strings.theme-follow-system;
-                            selected: root.theme-mode == 0;
-                            clicked => {
-                                root.theme-mode-changed(0);
-                            }
-                        }
-                        SegmentedOption {
-                            label: Strings.theme-light;
-                            selected: root.theme-mode == 1;
-                            clicked => {
-                                root.theme-mode-changed(1);
-                            }
-                        }
-                        SegmentedOption {
-                            label: Strings.theme-dark;
-                            selected: root.theme-mode == 2;
-                            clicked => {
-                                root.theme-mode-changed(2);
-                            }
-                        }
+                // 品牌位：标题 + 副标题
+                VerticalLayout {
+                    spacing: 2px;
+                    height: 52px;
+                    Text {
+                        text: Strings.settings-title;
+                        color: Theme.text;
+                        font-size: 17px;
+                        font-family: Theme.ui-font-bold;
+                        font-weight: Theme.ui-weight-bold;
+                    }
+                    Text {
+                        text: Strings.app-title;
+                        color: Theme.text-faint;
+                        font-size: 10px;
                     }
                 }
 
-                Text {
-                    text: Strings.settings-theme-hint;
-                    color: Theme.text-faint;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-            }
-        }
+                NavGroupLabel { text: Strings.group-system; }
 
-        // ── 界面语言
-        Card {
-            height: 100px;
-            VerticalLayout {
-                padding: 16px;
-                spacing: 8px;
-                SectionTitle {
+                NavItem {
+                    label: Strings.settings-appearance;
+                    glyph: Icons.appearance;
+                    active: root.settings-page == 0;
+                    clicked => {
+                        root.settings-page = 0;
+                    }
+                }
+                NavItem {
+                    label: Strings.settings-language;
                     glyph: Icons.language;
-                    title: Strings.settings-language;
+                    active: root.settings-page == 1;
+                    clicked => {
+                        root.settings-page = 1;
+                    }
                 }
-                Text {
-                    text: root.language-name;
-                    color: Theme.accent;
-                    font-size: 13px;
-                }
-                Text {
-                    text: Strings.settings-language-hint;
-                    color: Theme.text-faint;
-                    font-size: 11px;
-                    wrap: word-wrap;
-                }
-            }
-        }
-
-        // ── 诊断：日志不进界面，只给一个入口
-        Card {
-            height: 146px;
-            VerticalLayout {
-                padding: 16px;
-                spacing: 8px;
-                SectionTitle {
+                NavItem {
+                    label: Strings.settings-diagnostics;
                     glyph: Icons.info;
-                    title: Strings.settings-diagnostics;
+                    active: root.settings-page == 2;
+                    clicked => {
+                        root.settings-page = 2;
+                    }
                 }
-                Text {
-                    text: Strings.settings-log-dir-hint;
-                    color: Theme.text-faint;
-                    font-size: 11px;
-                    wrap: word-wrap;
+                NavItem {
+                    label: Strings.settings-about;
+                    glyph: Icons.about;
+                    active: root.settings-page == 3;
+                    clicked => {
+                        root.settings-page = 3;
+                    }
                 }
-                Text {
-                    text: root.log-dir;
-                    color: Theme.text-dim;
-                    font-size: 10px;
-                    wrap: word-wrap;
-                }
-                CenteredRow {
-                    ActionButton {
-                        glyph: Icons.folder_open;
-                        label: Strings.action-open-log-dir;
-                        clicked => {
-                            root.open-log-dir-clicked();
-                        }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+                Rectangle { height: 1px; background: Theme.border; }
+
+                // 关闭放在侧边栏底部 —— 与主窗口"底部放全局操作"的位置一致
+                NavItem {
+                    label: Strings.action-close;
+                    glyph: Icons.dismiss;
+                    active: false;
+                    clicked => {
+                        root.close-clicked();
                     }
                 }
             }
         }
 
-        Rectangle { vertical-stretch: 1; background: transparent; }
+        Rectangle { width: 1px; background: Theme.border; }
 
-        HorizontalLayout {
-            height: 36px;
-            alignment: end;
-            ActionButton {
-                primary: true;
-                label: Strings.action-close;
-                clicked => {
-                    root.close-clicked();
+        // ══ 右：当前分区
+        Rectangle {
+            horizontal-stretch: 1;
+            background: Theme.bg;
+
+            // ── 外观
+            if root.settings-page == 0 : VerticalLayout {
+                padding: Theme.pad;
+                spacing: 14px;
+
+                PageHeader {
+                    title: Strings.settings-appearance;
+                    glyph: Icons.appearance;
                 }
+
+                Card {
+                    height: 124px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        SectionTitle {
+                            glyph: Icons.appearance;
+                            title: Strings.settings-theme;
+                        }
+
+                        Rectangle {
+                            height: 38px;
+                            background: Theme.surface-hi;
+                            border-radius: 8px;
+                            HorizontalLayout {
+                                padding: 4px;
+                                spacing: 4px;
+                                SegmentedOption {
+                                    label: Strings.theme-follow-system;
+                                    selected: root.theme-mode == 0;
+                                    clicked => {
+                                        root.theme-mode-changed(0);
+                                    }
+                                }
+                                SegmentedOption {
+                                    label: Strings.theme-light;
+                                    selected: root.theme-mode == 1;
+                                    clicked => {
+                                        root.theme-mode-changed(1);
+                                    }
+                                }
+                                SegmentedOption {
+                                    label: Strings.theme-dark;
+                                    selected: root.theme-mode == 2;
+                                    clicked => {
+                                        root.theme-mode-changed(2);
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: Strings.settings-theme-hint;
+                            color: Theme.text-faint;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Card {
+                    height: 140px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 10px;
+
+                        SectionTitle {
+                            glyph: Icons.font;
+                            title: Strings.settings-font;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 12px;
+
+                            // 字体：系统里所有已安装字体 + 内置 miSans
+                            VerticalLayout {
+                                spacing: 6px;
+                                horizontal-stretch: 3;
+                                Text {
+                                    text: Strings.settings-font-family;
+                                    color: Theme.text-faint;
+                                    font-size: 11px;
+                                }
+                                Dropdown {
+                                    model: root.families;
+                                    current-index: root.family-index;
+                                    selected(index) => {
+                                        root.family-selected(index);
+                                    }
+                                }
+                            }
+
+                            // 字重：只列出所选字体实际提供的档位
+                            VerticalLayout {
+                                spacing: 6px;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: Strings.settings-font-weight;
+                                    color: Theme.text-faint;
+                                    font-size: 11px;
+                                }
+                                Dropdown {
+                                    model: root.weights;
+                                    current-index: root.weight-index;
+                                    selected(index) => {
+                                        root.weight-selected(index);
+                                    }
+                                }
+                            }
+                        }
+
+                        Text {
+                            text: Strings.settings-font-hint;
+                            color: Theme.text-faint;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+            }
+
+            // ── 语言
+            if root.settings-page == 1 : VerticalLayout {
+                padding: Theme.pad;
+                spacing: 14px;
+
+                PageHeader {
+                    title: Strings.settings-language;
+                    glyph: Icons.language;
+                }
+
+                Card {
+                    height: 108px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 8px;
+                        SectionTitle {
+                            glyph: Icons.language;
+                            title: Strings.settings-language;
+                        }
+                        Text {
+                            text: root.language-name;
+                            color: Theme.accent;
+                            font-size: 13px;
+                        }
+                        Text {
+                            text: Strings.settings-language-hint;
+                            color: Theme.text-faint;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+            }
+
+            // ── 诊断
+            if root.settings-page == 2 : VerticalLayout {
+                padding: Theme.pad;
+                spacing: 14px;
+
+                PageHeader {
+                    title: Strings.settings-diagnostics;
+                    glyph: Icons.info;
+                }
+
+                Card {
+                    height: 166px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 8px;
+                        SectionTitle {
+                            glyph: Icons.info;
+                            title: Strings.settings-diagnostics;
+                        }
+                        Text {
+                            text: Strings.settings-log-dir-hint;
+                            color: Theme.text-faint;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: root.log-dir;
+                            color: Theme.text-dim;
+                            font-size: 10px;
+                            wrap: word-wrap;
+                        }
+                        HorizontalLayout {
+                            height: 34px;
+                            spacing: 0px;
+                            ActionButton {
+                                glyph: Icons.folder_open;
+                                label: Strings.action-open-log-dir;
+                                clicked => {
+                                    root.open-log-dir-clicked();
+                                }
+                            }
+                            // 撑开：让按钮保持自身宽度并靠左，而不是被拉伸成通栏
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
+            }
+
+            // ── 关于：字体署名放在这里。
+            // MiSans 的许可协议明确要求"应当在软件中特别注明使用了 MiSans"，
+            // 所以这条不是装饰，是许可条件。
+            if root.settings-page == 3 : VerticalLayout {
+                padding: Theme.pad;
+                spacing: 14px;
+
+                PageHeader {
+                    title: Strings.settings-about;
+                    glyph: Icons.about;
+                    note: root.version;
+                }
+
+                Card {
+                    height: 176px;
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 9px;
+                        SectionTitle {
+                            glyph: Icons.font;
+                            title: Strings.about-fonts;
+                        }
+                        Text {
+                            text: Strings.about-misans;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: Strings.about-fluent-icons;
+                            color: Theme.text-dim;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: Strings.about-license-hint;
+                            color: Theme.text-faint;
+                            font-size: 11px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                Rectangle { vertical-stretch: 1; background: transparent; }
             }
         }
     }
 }
-
 // ───────────────────────────────────────────── 主窗口
 export component AppWindow inherits Window {
     title: Strings.app-title;
     width: 1140px;
     height: 760px;
     background: Theme.bg;
-    default-font-family: "Microsoft YaHei";
+    default-font-family: Theme.ui-font;
+    default-font-weight: Theme.ui-weight;
 
     // 当前页面：0 设备 / 1 远程桌面 / 2 摄像头 / 3 文件 / 4 消息
     // （设置不在这个列表里 —— 它是独立窗口）
@@ -944,7 +1302,8 @@ export component AppWindow inherits Window {
                         text: Strings.app-title;
                         color: Theme.text;
                         font-size: 17px;
-                        font-weight: 600;
+                        font-family: Theme.ui-font-bold;
+                        font-weight: Theme.ui-weight-bold;
                     }
                     Text {
                         text: Strings.tagline;

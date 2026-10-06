@@ -23,10 +23,12 @@
 //! | Linux | GNOME `gsettings … accent-color` → KDE `kdeglobals` → GTK `gtk.css` 的 `theme_selected_bg_color` |
 //! | 全部失败 | [`FALLBACK_ACCENT`] |
 
+pub mod fonts;
 pub mod palette;
 pub mod platform;
 pub mod prefs;
 
+pub use fonts::{FontCatalog, FontEntry, ResolvedFont, BUILTIN_FAMILY, DEFAULT_WEIGHT};
 pub use palette::{ColorScheme, Palette, ThemeMode};
 pub use prefs::Preferences;
 

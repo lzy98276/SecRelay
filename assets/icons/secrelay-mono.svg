@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img">
+  <title>SecRelay（单色）</title>
+
+  <!--
+    secrelay.svg 的单色版，用于：文档内联、单色印刷、将来的系统托盘。
+    用法：颜色跟随 CSS 的 color（currentColor）。
+      <span style="color:#127AD2">…内联 svg…</span>
+    注意：当成 <img src="..."> 引用时 currentColor 没有可继承的颜色，会落到初始值黑色。
+
+    与彩色版的两处差异，都是刻意的：
+      1. 去掉投影 —— 单色轮廓上加深色投影会显脏，托盘场景也不需要。
+      2. 箭头用 62% 不透明度 —— 单色下没有色相区分，靠明度差保住"飞机 + 一个动作符号"的主次。
+    两片翼之间的那道缝是透明缺口，所以即使全是同一个颜色，两片翼依然分得开。
+  -->
+
+  <g fill="currentColor" stroke="currentColor" stroke-width="7" stroke-linejoin="round">
+    <path d="M167,160 L78,52 L57,97 L133,144 Z"/>
+    <path d="M167,160 L133,144 L48,116 L27,161 Z"/>
+  </g>
+
+  <g fill="currentColor" stroke="currentColor" opacity="0.62">
+    <path d="M173,197 C197,201 210,183 217,174"
+          fill="none" stroke-width="16" stroke-linecap="round"/>
+    <path d="M233,153 L229.6,183.8 L204.4,164.2 Z" stroke="none"/>
+  </g>
+</svg>

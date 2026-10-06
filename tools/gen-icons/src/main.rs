@@ -56,6 +56,13 @@ const ICONS: &[(&str, &str)] = &[
     // 账号
     ("account", "ic_fluent_person_20_filled"),
     ("sign_in", "ic_fluent_arrow_enter_20_filled"),
+    // 字体
+    ("font", "ic_fluent_text_font_20_filled"),
+    // 设置分区
+    ("appearance", "ic_fluent_dark_theme_20_filled"),
+    ("about", "ic_fluent_book_information_20_filled"),
+    // 下拉框
+    ("chevron_down", "ic_fluent_chevron_down_20_filled"),
 ];
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

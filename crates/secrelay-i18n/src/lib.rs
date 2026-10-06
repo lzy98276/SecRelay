@@ -132,10 +132,20 @@ pub enum Key {
 
     // ── 设置
     SettingsTitle,
+    SettingsAppearance,
+    SettingsAbout,
+    AboutFonts,
+    AboutMiSans,
+    AboutFluentIcons,
+    AboutLicenseHint,
     SettingsLanguage,
     SettingsLanguageHint,
     SettingsTheme,
     SettingsThemeHint,
+    SettingsFont,
+    SettingsFontHint,
+    SettingsFontFamily,
+    SettingsFontWeight,
     SettingsDiagnostics,
     SettingsLogDirHint,
     ActionOpenLogDir,
@@ -144,6 +154,10 @@ pub enum Key {
     ThemeFollowSystem,
     ThemeLight,
     ThemeDark,
+
+    // ── 界面字体
+    FontSystem,
+    FontMiSans,
 
     // ── 账号
     AccountTitle,
@@ -227,16 +241,28 @@ impl Key {
         Key::ChannelFile,
         Key::ChannelControl,
         Key::SettingsTitle,
+        Key::SettingsAppearance,
+        Key::SettingsAbout,
+        Key::AboutFonts,
+        Key::AboutMiSans,
+        Key::AboutFluentIcons,
+        Key::AboutLicenseHint,
         Key::SettingsLanguage,
         Key::SettingsLanguageHint,
         Key::SettingsTheme,
         Key::SettingsThemeHint,
+        Key::SettingsFont,
+        Key::SettingsFontHint,
+        Key::SettingsFontFamily,
+        Key::SettingsFontWeight,
         Key::SettingsDiagnostics,
         Key::SettingsLogDirHint,
         Key::ActionOpenLogDir,
         Key::ThemeFollowSystem,
         Key::ThemeLight,
         Key::ThemeDark,
+        Key::FontSystem,
+        Key::FontMiSans,
         Key::AccountTitle,
         Key::AccountNotLoggedIn,
         Key::ActionLogin,
@@ -325,10 +351,21 @@ impl Key {
             Key::ChannelControl => "控制",
 
             Key::SettingsTitle => "设置",
+            Key::SettingsAppearance => "外观",
+            Key::SettingsAbout => "关于",
+            // MiSans 的许可协议要求在软件内注明使用了该字体，这里就是那处注明。
+            Key::AboutFonts => "字体",
+            Key::AboutMiSans => "miSans —— 界面字体，由小米提供，可免费商用",
+            Key::AboutFluentIcons => "Fluent System Icons —— 图标，© Microsoft，MIT 许可",
+            Key::AboutLicenseHint => "完整许可与来源说明见仓库 assets/fonts/",
             Key::SettingsLanguage => "界面语言",
             Key::SettingsLanguageHint => "目前仅提供简体中文，其它语言后续添加",
             Key::SettingsTheme => "主题",
             Key::SettingsThemeHint => "跟随系统会随系统的深浅色偏好自动切换",
+            Key::SettingsFont => "界面字体",
+            Key::SettingsFontHint => "列出系统里已安装的字体；字重按所选字体实际提供的档位显示",
+            Key::SettingsFontFamily => "字体",
+            Key::SettingsFontWeight => "字重",
             Key::SettingsDiagnostics => "诊断",
             Key::SettingsLogDirHint => "日志写在文件里，不占用界面；需要排查问题时再打开",
             Key::ActionOpenLogDir => "打开日志目录",
@@ -341,6 +378,9 @@ impl Key {
             Key::ThemeFollowSystem => "跟随系统",
             Key::ThemeLight => "浅色",
             Key::ThemeDark => "深色",
+
+            Key::FontSystem => "系统默认",
+            Key::FontMiSans => "miSans",
 
             Key::NotAvailableTitle => "该功能尚未实现",
             Key::NotAvailableHint => "页面位置已经留好，等功能接上即可",
@@ -394,6 +434,27 @@ pub fn render(template: &str, args: &[(&str, &str)]) -> String {
     out
 }
 
+/// 字重的中文名。
+///
+/// 只覆盖标准档位；非标准值返回空串，界面就只显示数字。
+/// 放在这里而不是散在界面代码里，是为了守住"界面不含面向用户的字面量"这条约定。
+pub fn weight_name(weight: u16, lang: Lang) -> &'static str {
+    match lang {
+        Lang::ZhHans => match weight {
+            100 => "极细",
+            200 => "特细",
+            300 => "细体",
+            400 => "常规",
+            500 => "中等",
+            600 => "半粗",
+            700 => "粗体",
+            800 => "特粗",
+            900 => "极粗",
+            _ => "",
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,7 +478,7 @@ mod tests {
         // 防止新增 Key 变体后忘记加进 ALL —— 那样上面的穷尽检查会漏掉它。
         // Rust 无法在不引宏的情况下枚举枚举变体，所以这里用一个数字做绊线：
         // 变体数一变，这个测试就失败，提醒维护者同步 ALL。
-        const EXPECTED: usize = 77;
+        const EXPECTED: usize = 89;
         assert_eq!(
             Key::ALL.len(),
             EXPECTED,

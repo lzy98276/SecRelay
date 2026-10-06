@@ -38,9 +38,13 @@ cargo run -p secrelay-cli -- help
 |---|---|
 | ![设备页](docs/ui-devices.png) | ![远程桌面页](docs/ui-screen.png) |
 
-| 消息 | 设置（独立窗口） |
+| 消息 | 设置（独立窗口，与主窗口同尺寸） |
 |---|---|
 | ![消息页](docs/ui-messages.png) | ![设置窗口](docs/ui-settings.png) |
+
+| 关于（字体署名） |
+|---|
+| ![关于页](docs/ui-about.png) |
 
 三条界面约定：
 
@@ -55,6 +59,7 @@ cargo run -p secrelay-cli -- help
 
 - **主窗口**：左侧导航（按「看 / 传 / 说」分组的功能页面）+ 底部「账号 / 设置」，右侧当前页面。
 - **设置窗口**：**独立窗口**，由导航栏底部的「设置」打开（不占主窗口的页面位）。
+  **与主窗口同尺寸、同样有侧边栏**（外观 / 界面语言 / 诊断 / 关于），避免开关设置时窗口跳变。
 - **账号入口**：在导航栏底部、设置上方。位置已就位，但 SECTL-auth 接入尚未实现 ——
   界面上如实显示「未登录」，不做假登录。
 
@@ -73,6 +78,28 @@ Windows 出厂默认蓝 `#0078D4`。强调色会按当前配色做**可读性校
 （0.12），以免把 Apple 蓝、GNOME 蓝这类官方系统色也一起改掉。
 
 用户选择持久化在 `%LOCALAPPDATA%\SecRelay\config.txt`（纯 `key=value`，可手工编辑）。
+
+### 字体
+
+**默认 miSans**（随应用分发，不依赖用户装了什么），可改成系统里任意已安装字体：
+
+| 设置项 | 说明 |
+|---|---|
+| 字体 | 下拉框列出系统全部字体（本机 253 个），内置 miSans 排第一 |
+| 字重 | 下拉框只列出**所选字体实际提供**的档位 |
+
+字重这一项是刻意这样设计的：选了某个字体后，如果给一个它没有的字重，
+渲染器会去**合成假粗体**（字面糊、笔画粘连）。所以先枚举该字体真实存在的字重，
+用户选的值会就近落到实际档位，下拉框里显示的也是真正生效的那个。
+
+⚠️ miSans 的粗体是**另一个字体族**（`MiSans Demibold`，不是 `MiSans` 的权重），
+所以 Slint 侧分了 `Theme.ui-font` / `ui-font-bold` / `ui-weight` / `ui-weight-bold`
+四个属性，由 `secrelay-theme::fonts` 的 `FontCatalog::resolve` 算出来。
+详见 [assets/fonts/README.md](assets/fonts/README.md#最大的坑demibold-是另一个字体族)。
+
+字体许可：miSans 免费商用，但**要求在软件中注明使用了 MiSans** ——
+这条已在设置窗口的「关于」页满足（不是只写在文档里）。见
+[assets/fonts/LICENSE-MiSans.md](assets/fonts/LICENSE-MiSans.md)。
 
 `--demo` 会自动跑完整闭环（握手 → 协商三频道 → 双向文字消息）；
 `--preview` 会启动本机画面采集；`--page N` 可直接打开指定页面，方便截图与演示。
@@ -143,6 +170,8 @@ docs/
 - **桌面客户端**（Slint UI：**左侧导航分组 + 分页面**，中文 i18n，日志写文件不进界面）
 - **类型安全 i18n**（68 条文案 × 简体中文；新增语言漏翻会编译失败）
 - **跟随系统强调色**（Windows 注册表 / macOS / GNOME·KDE·GTK；取不到则回退 Windows 出厂默认蓝 `#0078D4`）
+- **浅色 / 深色 / 跟随系统**三态主题（系统深浅色偏好同样按平台探测）
+- **界面字体可选**：下拉框列出系统全部字体 + 内置 miSans（默认），字重按字体实际档位选
 - **Fluent System Icons 实心图标**（码位由 `tools/gen-icons` 从字体生成，不手抄；
   字体在编译期由 Slint 嵌入）
 - 本机画面预览（采集 → 像素转换 → 界面显示；实测 CPU 拷贝路径约 1 个核心，见 measurements）

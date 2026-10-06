@@ -24,7 +24,7 @@ use secrelay_i18n::{Key, Lang};
 use secrelay_media::{scale_for_width, to_rgba_scaled, CaptureError, RgbaImage};
 use secrelay_protocol::{Channel, ControlMessage, DeviceId};
 use secrelay_session::{Session, SessionConfig, SessionEvent};
-use secrelay_theme::{Palette, Rgb};
+use secrelay_theme::{Palette, ResolvedFont, Rgb};
 use secrelay_transport::loopback_pair;
 use slint::{ComponentHandle, ModelRc, VecModel, Weak};
 
@@ -111,16 +111,27 @@ pub fn apply_strings(strings: Strings, lang: Lang) {
     strings.set_preview_disclaimer(key(Key::PreviewDisclaimer));
 
     strings.set_settings_title(key(Key::SettingsTitle));
+    strings.set_settings_appearance(key(Key::SettingsAppearance));
+    strings.set_settings_about(key(Key::SettingsAbout));
+    strings.set_about_fonts(key(Key::AboutFonts));
+    strings.set_about_misans(key(Key::AboutMiSans));
+    strings.set_about_fluent_icons(key(Key::AboutFluentIcons));
+    strings.set_about_license_hint(key(Key::AboutLicenseHint));
     strings.set_settings_language(key(Key::SettingsLanguage));
     strings.set_settings_language_hint(key(Key::SettingsLanguageHint));
     strings.set_settings_theme(key(Key::SettingsTheme));
     strings.set_settings_theme_hint(key(Key::SettingsThemeHint));
+    strings.set_settings_font(key(Key::SettingsFont));
+    strings.set_settings_font_hint(key(Key::SettingsFontHint));
     strings.set_settings_diagnostics(key(Key::SettingsDiagnostics));
     strings.set_settings_log_dir_hint(key(Key::SettingsLogDirHint));
 
     strings.set_theme_follow_system(key(Key::ThemeFollowSystem));
     strings.set_theme_light(key(Key::ThemeLight));
     strings.set_theme_dark(key(Key::ThemeDark));
+
+    strings.set_font_system(key(Key::FontSystem));
+    strings.set_font_misans(key(Key::FontMiSans));
 
     strings.set_account_title(key(Key::AccountTitle));
     strings.set_account_not_logged_in(key(Key::AccountNotLoggedIn));
@@ -158,6 +169,18 @@ pub fn apply_language_to_settings(settings: &SettingsWindow, lang: Lang) {
     apply_strings(settings.global::<Strings>(), lang);
     settings.set_language_name(lang.native_name().into());
     settings.set_log_dir(log_dir().display().to_string().into());
+}
+
+/// 把界面字体注入某一棵树里的 `Theme` 全局。
+///
+/// 传入的是**解析后**的结果而不是用户原始选择：字体族名可能与用户选的不同
+/// （miSans 的粗体是另一个 family），字重也可能被调成该字体实际存在的档位。
+/// 解析逻辑在 `secrelay-theme::fonts`，有测试覆盖。
+pub fn apply_fonts(theme: Theme, font: &ResolvedFont) {
+    theme.set_ui_font(font.family.as_str().into());
+    theme.set_ui_font_bold(font.bold_family.as_str().into());
+    theme.set_ui_weight(i32::from(font.weight));
+    theme.set_ui_weight_bold(i32::from(font.bold_weight));
 }
 
 /// 把调色板注入某一棵树里的 `Theme` 全局。
