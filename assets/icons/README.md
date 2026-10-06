@@ -7,6 +7,9 @@
 | `secrelay.svg` | **唯一源文件**。256 视图框、透明底、带投影。所有位图都必须由它派生 |
 | `secrelay-mono.svg` | 单色版：文档内联、单色印刷、将来的系统托盘 |
 | `png/secrelay-*.png` | 文档与官网直接用的位图导出（透明底） |
+| `secrelay.ico` | Windows 多尺寸图标（32/48/64/128/256），由 SVG 派生 |
+| `secrelay.rc` | 图标资源脚本（`1 ICON "secrelay.ico"`），exe 图标的重生成源 |
+| `secrelay.res` | 由 `.rc` 预编译出的二进制资源，**构建期直接喂给链接器**，见下节 |
 
 **不要手改派生位图。** 改了矢量就重新导出，否则两者会不一致。
 
@@ -85,6 +88,45 @@ resvg --width 128 --height 128 assets/icons/secrelay.svg assets/icons/png/secrel
 ```
 
 仓库里现有的 `png/` 是用无头 Edge 截出来的（这台机器上没有 resvg）。那个方式依赖 Windows + Edge，**不适合进 CI**，确定导出管线后应换成 resvg 或 sharp，并把"派生位图与矢量不一致"做成可检查项。
+
+## 已接入的位置
+
+| 位置 | 在哪 | 说明 |
+|---|---|---|
+| 窗口图标（标题栏 / 任务栏 / Alt-Tab） | `apps/secrelay-desktop/ui/app.slint` | `icon: @image-url("../../../assets/icons/png/secrelay-256.png")`。**`Window.icon` 是逐窗口属性，不会继承**，所以 `SettingsWindow` 与 `AppWindow` 各写了一遍 |
+| exe 图标（资源管理器 / 任务栏固定项） | `apps/secrelay-desktop/build.rs` | 把 `assets/icons/secrelay.res` 用 `cargo:rustc-link-arg-bins` 交给链接器 |
+
+窗口图标用的是 **PNG 而不是 SVG**：Slint 的 SVG 解码在 `svg` feature 之后，用位图可以避开这个依赖。
+256px 是合适的档位 —— winit 后端按 64pt × DPI 缩放，200% 缩放屏上需要 128 物理像素，256 留了余量。
+
+## exe 图标资源怎么重生成
+
+`secrelay.res` 是**预编译**提交进仓库的，这样构建期不需要任何外部工具（`rc.exe` / `windres` 都不需要）。
+`.ico` 变了才需要重生成：
+
+```bash
+# 1) SVG → .ico（多尺寸：32/48/64/128/256）。
+#    低于 32px 不手调，交给系统缩放，理由见"最小尺寸"一节。
+#    .ico 可以内嵌 PNG，任何能从 SVG 导出 PNG 的工具都能做。
+
+# 2) .rc → .res，二选一：
+windres -I assets/icons -i assets/icons/secrelay.rc -O res -o assets/icons/secrelay.res
+#   需要 MinGW 的 gcc/cpp 在 PATH 上，否则 windres 会自动预处理失败（报 "preprocessing failed"）
+
+rc /nologo /fo assets/icons/secrelay.res assets/icons/secrelay.rc
+#   rc.exe 来自 Windows SDK（装了 VS 的机器一般在 Windows Kits\10\bin\*\x64）
+```
+
+**为什么不用 `winresource` / `embed-resource`：** 这两个 crate 在 MSVC 目标上都要 Windows SDK 的 `rc.exe`，
+而开发机上不一定装了（本项目所在的机器就没装）、CI 更不一定。把资源预编译好再喂给链接器，构建期零依赖。
+
+验证 exe 图标是否真的进去了（不要靠肉眼看文件夹）：
+
+```powershell
+Add-Type -AssemblyName System.Drawing
+[System.Drawing.Icon]::ExtractAssociatedIcon("target/debug/secrelay-desktop.exe").ToBitmap().Save("$env:TEMP\check.png")
+```
+提取出来是纸飞机就对了；是"窗口 + 蓝色方块"那个通用图标就说明没链上。
 
 ## 使用禁忌
 

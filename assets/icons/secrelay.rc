@@ -1,0 +1,4 @@
+// SecRelay 应用图标资源。
+// 资源编号用 1 —— Windows 约定资源管理器/任务栏取第一个图标资源。
+// 图标本体 secrelay.ico 由 secrelay.svg 派生（尺寸与导出规范见同目录 README.md）。
+1 ICON "secrelay.ico"

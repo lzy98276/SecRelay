@@ -1,4 +1,4 @@
-//! UI ↔ Rust 的桥接层。
+﻿//! UI ↔ Rust 的桥接层。
 //!
 //! 这一层是需求分析 §6.1 里"UI 层只做三件事"的落点：**显示帧、显示状态、发出意图**。
 //! 它不认识 WebRTC，也不认识编码器；只跟 `secrelay-session` 的公开 API 打交道。
@@ -24,11 +24,11 @@ use secrelay_i18n::{Key, Lang};
 use secrelay_media::{scale_for_width, to_rgba_scaled, CaptureError, RgbaImage};
 use secrelay_protocol::{Channel, ControlMessage, DeviceId};
 use secrelay_session::{Session, SessionConfig, SessionEvent};
-use secrelay_theme::{Palette, ResolvedFont, Rgb};
+use secrelay_theme::ResolvedFont;
 use secrelay_transport::loopback_pair;
 use slint::{ComponentHandle, ModelRc, VecModel, Weak};
 
-use crate::{AppWindow, ChatMessage, SettingsWindow, Strings, Theme};
+use crate::{AppWindow, ChatMessage, SettingsWindow, Strings, UiFont};
 
 /// 从 UI 线程投递待发文字给会话线程。
 ///
@@ -100,7 +100,6 @@ pub fn apply_strings(strings: Strings, lang: Lang) {
     strings.set_action_preview_start(key(Key::ActionPreviewStart));
     strings.set_action_preview_stop(key(Key::ActionPreviewStop));
     strings.set_action_open_log_dir(key(Key::ActionOpenLogDir));
-    strings.set_action_close(key(Key::ActionClose));
 
     strings.set_message_placeholder(key(Key::MessagePlaceholder));
     strings.set_messages_empty(key(Key::MessagesEmpty));
@@ -121,6 +120,11 @@ pub fn apply_strings(strings: Strings, lang: Lang) {
     strings.set_settings_language_hint(key(Key::SettingsLanguageHint));
     strings.set_settings_theme(key(Key::SettingsTheme));
     strings.set_settings_theme_hint(key(Key::SettingsThemeHint));
+    strings.set_settings_accent(key(Key::SettingsAccent));
+    strings.set_accent_follow_system(key(Key::AccentFollowSystem));
+    strings.set_accent_custom(key(Key::AccentCustom));
+    strings.set_settings_hue(key(Key::SettingsHue));
+    strings.set_settings_saturation(key(Key::SettingsSaturation));
     strings.set_settings_font(key(Key::SettingsFont));
     strings.set_settings_font_hint(key(Key::SettingsFontHint));
     strings.set_settings_diagnostics(key(Key::SettingsDiagnostics));
@@ -129,11 +133,6 @@ pub fn apply_strings(strings: Strings, lang: Lang) {
     strings.set_theme_follow_system(key(Key::ThemeFollowSystem));
     strings.set_theme_light(key(Key::ThemeLight));
     strings.set_theme_dark(key(Key::ThemeDark));
-
-    strings.set_font_system(key(Key::FontSystem));
-    strings.set_font_misans(key(Key::FontMiSans));
-
-    strings.set_account_title(key(Key::AccountTitle));
     strings.set_account_not_logged_in(key(Key::AccountNotLoggedIn));
     strings.set_action_login(key(Key::ActionLogin));
 
@@ -171,39 +170,15 @@ pub fn apply_language_to_settings(settings: &SettingsWindow, lang: Lang) {
     settings.set_log_dir(log_dir().display().to_string().into());
 }
 
-/// 把界面字体注入某一棵树里的 `Theme` 全局。
+/// 把界面字体注入某一棵树里的 `UiFont` 全局。
 ///
-/// 传入的是**解析后**的结果而不是用户原始选择：字体族名可能与用户选的不同
-/// （miSans 的粗体是另一个 family），字重也可能被调成该字体实际存在的档位。
-/// 解析逻辑在 `secrelay-theme::fonts`，有测试覆盖。
-pub fn apply_fonts(theme: Theme, font: &ResolvedFont) {
-    theme.set_ui_font(font.family.as_str().into());
-    theme.set_ui_font_bold(font.bold_family.as_str().into());
-    theme.set_ui_weight(i32::from(font.weight));
-    theme.set_ui_weight_bold(i32::from(font.bold_weight));
+/// 传入的是解析后的结果：字体族名与字重可能都跟用户选的原始值不同
+/// （miSans 的 Light/Medium/Demibold 各自是独立字体族）。
+pub fn apply_fonts(ui_font: UiFont, font: &ResolvedFont) {
+    ui_font.set_family(font.family.as_str().into());
+    ui_font.set_weight(i32::from(font.weight));
 }
 
-/// 把调色板注入某一棵树里的 `Theme` 全局。
-///
-/// 颜色不写在 `.slint` 里，是因为"跟随系统"要在运行时切换，而且强调色要按
-/// 浅色/深色分别做可读性调整 —— 那部分逻辑在 `secrelay-theme` 里且有测试。
-pub fn apply_palette(theme: Theme, palette: &Palette) {
-    let color = |c: Rgb| slint::Color::from_rgb_u8(c.r, c.g, c.b);
-
-    theme.set_bg(color(palette.bg));
-    theme.set_nav(color(palette.nav));
-    theme.set_surface(color(palette.surface));
-    theme.set_surface_hi(color(palette.surface_hi));
-    theme.set_stage(color(palette.stage));
-    theme.set_border(color(palette.border));
-    theme.set_text(color(palette.text));
-    theme.set_text_dim(color(palette.text_dim));
-    theme.set_text_faint(color(palette.text_faint));
-    theme.set_idle(color(palette.idle));
-    theme.set_accent(color(palette.accent));
-    theme.set_accent_soft(color(palette.accent_soft));
-    theme.set_on_accent(color(palette.on_accent));
-}
 
 // ────────────────────────────────────────────────────── 日志目录
 

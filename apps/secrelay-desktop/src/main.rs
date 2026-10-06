@@ -1,31 +1,7 @@
-//! SecRelay 桌面客户端。
+﻿//! SecRelay 桌面客户端。
 //!
-//! # 分层
-//!
-//! ```text
-//! ui/app.slint   界面：主窗口（导航 + 分页面）与设置窗口（独立，同尺寸带侧边栏）
-//! src/bridge.rs  UI ↔ 核心 的桥接：只显示状态、发出意图
-//! secrelay-*     核心（协议 / 传输 / 会话 / 采集 / 主题 / 字体 / i18n），不依赖任何 UI 框架
-//! ```
-//!
-//! 这条边界是需求分析 §6.1 的核心建议：**UI 框架是可替换的一层壳**。
-//! 所以这个 crate 是唯一允许依赖 Slint 的地方，`crates/*` 里没有一处 UI 依赖。
-//!
-//! # 外观设置的流向
-//!
-//! ```text
-//! 配置文件 ──► Preferences ──┐
-//!                            ├──► FontCatalog::resolve ──► Theme (family + weight)
-//! 系统字体目录 ──► FontCatalog ┘
-//! ```
-//!
-//! 界面只拿到"最终该用什么 family、什么字重"，中间的取舍（miSans 靠换 family 表达
-//! 字重、系统字体挑最近可用字重）都在 `secrelay-theme` 里，有测试覆盖。
-//!
-//! # 日志
-//!
-//! 诊断信息**不进界面**，写进 [`bridge::log_dir`] 下的按天滚动文件；
-//! 界面只在设置窗口提供一个"打开日志目录"的入口。
+//! 界面用 Slint 官方 Material 组件库搭（见 `ui/app.slint`），本文件只负责：
+//! 组装窗口、把配置与探测结果注入 `Strings` / `UiFont`、转发用户操作。
 
 slint::include_modules!();
 
@@ -36,22 +12,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use secrelay_i18n::{weight_name, Key, Lang};
-use secrelay_theme::{FontCatalog, Palette, Preferences, ThemeMode};
+use secrelay_theme::{accent_from_hsv, AccentMode, ColorScheme as ThemeColorScheme, FontCatalog, Preferences, Rgb, ThemeMode};
 use slint::{ComponentHandle, ModelRc, VecModel};
 
 fn main() -> anyhow::Result<()> {
-    // 持有 guard 直到进程退出，否则后台写日志线程会被提前停掉。
     let _log_guard = init_logging();
 
-    // 语言协商：目前只有简体中文，所以直接用默认值。
-    // 将来在这里接"系统语言 / 用户配置"，Lang::negotiate 已经准备好了。
     let lang = Lang::default();
-
-    let preferences = Preferences::load();
-    let accent = secrelay_theme::detect_accent();
+    let mut preferences = Preferences::load();
+    let detected_accent = secrelay_theme::detect_accent();
     let system_scheme = secrelay_theme::platform::detect_color_scheme();
 
-    // 枚举系统字体。要读系统字体目录，只做一次。
     let started = std::time::Instant::now();
     let catalog = Rc::new(FontCatalog::load());
     tracing::info!(
@@ -59,40 +30,30 @@ fn main() -> anyhow::Result<()> {
         elapsed_ms = started.elapsed().as_millis() as u64,
         "已枚举系统字体"
     );
-
     tracing::info!(
         version = env!("CARGO_PKG_VERSION"),
-        log_dir = %bridge::log_dir().display(),
-        accent = %accent.color,
-        accent_source = ?accent.source,
+        accent = %detected_accent.color,
+        accent_source = ?detected_accent.source,
         system_scheme = ?system_scheme,
-        theme_mode = ?preferences.theme_mode,
-        font_family = %preferences.font_family,
-        font_weight = preferences.font_weight,
-        "SecRelay 桌面客户端启动"
+        "启动"
     );
 
-    let font_state = Rc::new(RefCell::new(FontState {
+    let state = Rc::new(RefCell::new(UiState {
+        theme_mode: preferences.theme_mode,
+        accent_mode: preferences.accent_mode,
+        hue: preferences.hue,
+        saturation: preferences.saturation,
         family: preferences.font_family.clone(),
-        weight: preferences.font_weight,
+        weight_tier: preferences.font_weight,
     }));
 
-    // --settings-only：只打开设置窗口。
-    //
-    // 用于测试与截图。Slint 的 `run()` 在主窗口不显示时会立刻返回，所以这条路径
-    // 干脆不创建主窗口，而不是创建了再隐藏。
+    // --settings-only：只创建设置窗口，用于测试与截图。
+    // Slint 的 run() 会在没有可见窗口时立刻返回，所以这条路径不创建主窗口。
     if std::env::args().any(|arg| arg == "--settings-only") {
         let settings = SettingsWindow::new()?;
         bridge::apply_language_to_settings(&settings, lang);
-        let palette = Palette::build(preferences.theme_mode.resolve(system_scheme), accent.color);
-        bridge::apply_palette(settings.global::<Theme>(), &palette);
-        {
-            let state = font_state.borrow();
-            let resolved = catalog.resolve(&state.family, state.weight);
-            bridge::apply_fonts(settings.global::<Theme>(), &resolved);
-            push_font_options(&settings, &catalog, &state.family, state.weight, lang);
-        }
-        settings.set_theme_mode(preferences.theme_mode.index());
+        apply_appearance(&settings, None, &state.borrow(), detected_accent.color, system_scheme, &catalog, lang);
+        push_font_options(&settings, &catalog, &state.borrow(), lang);
         apply_version(&settings);
         if let Some(page) = arg_value("--settings-page").and_then(|value| value.parse::<i32>().ok()) {
             settings.set_settings_page(page.clamp(0, 3));
@@ -107,41 +68,20 @@ fn main() -> anyhow::Result<()> {
 
     bridge::apply_language(&ui, lang);
     bridge::apply_language_to_settings(&settings, lang);
-
-    // 初始外观
-    let palette = {
-        let scheme = preferences.theme_mode.resolve(system_scheme);
-        let palette = Palette::build(scheme, accent.color);
-        bridge::apply_palette(ui.global::<Theme>(), &palette);
-        bridge::apply_palette(settings.global::<Theme>(), &palette);
-        palette
-    };
     {
-        let state = font_state.borrow();
-        let resolved = catalog.resolve(&state.family, state.weight);
-        bridge::apply_fonts(ui.global::<Theme>(), &resolved);
-        bridge::apply_fonts(settings.global::<Theme>(), &resolved);
-        push_font_options(&settings, &catalog, &state.family, state.weight, lang);
-        tracing::info!(
-            scheme = ?preferences.theme_mode.resolve(system_scheme),
-            accent = %palette.accent,
-            family = %resolved.family,
-            weight = resolved.weight,
-            bold_weight = resolved.bold_weight,
-            "应用外观"
-        );
+        let state = state.borrow();
+        apply_appearance(&settings, Some(&ui), &state, detected_accent.color, system_scheme, &catalog, lang);
+        push_font_options(&settings, &catalog, &state, lang);
     }
-
-    settings.set_theme_mode(preferences.theme_mode.index());
     apply_version(&settings);
+    settings.set_theme_mode(preferences.theme_mode.index());
     settings.hide()?;
 
-    // --page N：启动即打开指定页面（方便截图与演示）
     if let Some(page) = arg_value("--page").and_then(|value| value.parse::<i32>().ok()) {
         ui.set_current_page(page.clamp(0, 4));
     }
 
-    // ── 设置窗口的开关
+    // ── 设置窗口开关
     let settings_weak = settings.as_weak();
     ui.on_settings_clicked(move || {
         if let Some(settings) = settings_weak.upgrade() {
@@ -152,16 +92,6 @@ fn main() -> anyhow::Result<()> {
     });
 
     let settings_weak = settings.as_weak();
-    settings.on_close_clicked(move || {
-        if let Some(settings) = settings_weak.upgrade() {
-            let _ = settings.hide();
-        }
-    });
-
-    // 用户点设置窗口的关闭按钮：隐藏而不是退出（退出由主窗口负责）
-    //
-    // `close-requested` 不在组件上，要通过 Window 句柄拿。
-    let settings_weak = settings.as_weak();
     settings.window().on_close_requested(move || {
         if let Some(settings) = settings_weak.upgrade() {
             let _ = settings.hide();
@@ -169,7 +99,6 @@ fn main() -> anyhow::Result<()> {
         slint::CloseRequestResponse::HideWindow
     });
 
-    // 主窗口关闭时把设置窗口一起收掉，否则 Slint 会认为还有窗口没关。
     let settings_weak = settings.as_weak();
     ui.window().on_close_requested(move || {
         if let Some(settings) = settings_weak.upgrade() {
@@ -178,80 +107,103 @@ fn main() -> anyhow::Result<()> {
         slint::CloseRequestResponse::HideWindow
     });
 
-    // ── 字体切换
-    //
-    // 两处都只改字体：保留用户的主题选择。
+    // ── 主题（浅色/深色）
     {
-        let catalog = catalog.clone();
-        let state = font_state.clone();
-        let theme_mode = preferences.theme_mode;
         let ui_weak = ui.as_weak();
         let settings_weak = settings.as_weak();
+        let state = state.clone();
+        settings.on_theme_mode_changed(move |index| {
+            let mode = ThemeMode::from_index(index);
+            state.borrow_mut().theme_mode = mode;
+            save(&current_prefs(&state.borrow()));
+            if let (Some(ui), Some(settings)) = (ui_weak.upgrade(), settings_weak.upgrade()) {
+                settings.set_theme_mode(mode.index());
+                apply_accent(&ui, &settings, &state.borrow(), detected_accent.color);
+            }
+        });
+    }
+
+    // ── 主题色模式
+    {
+        let ui_weak = ui.as_weak();
+        let settings_weak = settings.as_weak();
+        let state = state.clone();
+        let catalog = catalog.clone();
+        settings.on_accent_mode_changed(move |index| {
+            let mode = AccentMode::from_index(index);
+            state.borrow_mut().accent_mode = mode;
+            save(&current_prefs(&state.borrow()));
+            if let (Some(ui), Some(settings)) = (ui_weak.upgrade(), settings_weak.upgrade()) {
+                settings.set_accent_mode(mode.index());
+                settings.set_accent_preview(color_of(accent_seed(&state.borrow(), detected_accent.color)));
+                apply_accent(&ui, &settings, &state.borrow(), detected_accent.color);
+                let state = state.borrow();
+                push_font_options(&settings, &catalog, &state, lang);
+            }
+        });
+    }
+
+    // ── 色盘拖拽
+    {
+        let ui_weak = ui.as_weak();
+        let settings_weak = settings.as_weak();
+        let state = state.clone();
+        settings.on_accent_changed(move |hue, saturation| {
+            {
+                let mut state = state.borrow_mut();
+                state.hue = hue;
+                state.saturation = saturation;
+            }
+            save(&current_prefs(&state.borrow()));
+            if let (Some(ui), Some(settings)) = (ui_weak.upgrade(), settings_weak.upgrade()) {
+                let seed = accent_from_hsv(hue, saturation / 100.0);
+                settings.set_hue(hue);
+                settings.set_saturation(saturation);
+                settings.set_accent_preview(color_of(seed));
+                apply_accent(&ui, &settings, &state.borrow(), detected_accent.color);
+            }
+        });
+    }
+
+    // ── 字体与字重
+    {
+        let ui_weak = ui.as_weak();
+        let settings_weak = settings.as_weak();
+        let state = state.clone();
+        let catalog = catalog.clone();
         settings.on_family_selected(move |index| {
             let families = catalog.families();
             let Some(family) = families.get(index.max(0) as usize).cloned() else {
                 return;
             };
-            let weight = {
-                let mut state = state.borrow_mut();
-                state.family = family.clone();
-                state.weight
-            };
-            save_font(theme_mode, &family, weight);
-            apply_font_selection(&catalog, &ui_weak, &settings_weak, &family, weight, lang);
+            state.borrow_mut().family = family.clone();
+            save(&current_prefs(&state.borrow()));
+            let state_ref = state.borrow();
+            apply_font(&ui_weak, &settings_weak, &catalog, &state_ref);
+            if let Some(settings) = settings_weak.upgrade() {
+                push_font_options(&settings, &catalog, &state_ref, lang);
+            }
         });
     }
 
     {
-        let catalog = catalog.clone();
-        let state = font_state.clone();
-        let theme_mode = preferences.theme_mode;
         let ui_weak = ui.as_weak();
         let settings_weak = settings.as_weak();
+        let state = state.clone();
+        let catalog = catalog.clone();
         settings.on_weight_selected(move |index| {
             let family = state.borrow().family.clone();
-            // 按当前字体实际提供的档位取，而不是按标准九档
-            let weights = catalog.selectable_weights(&family);
-            let Some(weight) = weights.get(index.max(0) as usize).copied() else {
+            let tiers = catalog.selectable_weights(&family);
+            let Some(tier) = tiers.get(index.max(0) as usize).copied() else {
                 return;
             };
-            state.borrow_mut().weight = weight;
-            save_font(theme_mode, &family, weight);
-            apply_font_selection(&catalog, &ui_weak, &settings_weak, &family, weight, lang);
-        });
-    }
-
-    // ── 主题切换
-    {
-        let state = font_state.clone();
-        let ui_weak = ui.as_weak();
-        let settings_weak = settings.as_weak();
-        settings.on_theme_mode_changed(move |index| {
-            let mode = ThemeMode::from_index(index);
-            let (family, weight) = {
-                let state = state.borrow();
-                (state.family.clone(), state.weight)
-            };
-            // 只改主题，字体保持用户当前的选择。
-            let updated = Preferences {
-                theme_mode: mode,
-                font_family: family,
-                font_weight: weight,
-            };
-            if let Err(err) = updated.save() {
-                // 写盘失败只记录：本次会话的选择仍然要生效。
-                tracing::warn!("保存主题偏好失败：{err}");
+            state.borrow_mut().weight_tier = tier;
+            save(&current_prefs(&state.borrow()));
+            let state_ref = state.borrow();
+            apply_font(&ui_weak, &settings_weak, &catalog, &state_ref);
+            if let Some(settings) = settings_weak.upgrade() {
+                push_font_options(&settings, &catalog, &state_ref, lang);
             }
-
-            let (Some(ui), Some(settings)) = (ui_weak.upgrade(), settings_weak.upgrade()) else {
-                return;
-            };
-            settings.set_theme_mode(mode.index());
-            let scheme = mode.resolve(system_scheme);
-            let palette = Palette::build(scheme, accent.color);
-            bridge::apply_palette(ui.global::<Theme>(), &palette);
-            bridge::apply_palette(settings.global::<Theme>(), &palette);
-            tracing::info!(mode = ?mode, scheme = ?scheme, accent = %palette.accent, "主题已切换");
         });
     }
 
@@ -276,14 +228,14 @@ fn main() -> anyhow::Result<()> {
             return;
         }
         if bridge::send_text(text) {
-            // 发送成功才清空输入框；失败时保留内容，免得用户白打一遍。
+            // 发送成功才清空输入框，失败时保留内容
             if let Some(ui) = weak.upgrade() {
                 ui.set_message_input("".into());
             }
         }
     });
 
-    // ── 本机画面预览开关
+    // ── 本机画面预览
     let weak = ui.as_weak();
     ui.on_preview_toggle_clicked(move || {
         let Some(ui) = weak.upgrade() else {
@@ -296,28 +248,20 @@ fn main() -> anyhow::Result<()> {
         }
     });
 
-    // ── 打开日志目录（两个窗口都有入口）
     ui.on_open_log_dir_clicked(open_logs);
     settings.on_open_log_dir_clicked(open_logs);
 
-    // ── 登录入口
-    // 位置已经就位（导航栏底部、设置上方），但账号系统接入尚未实现。
-    // 设计见 docs/账号系统接入.md；这里不做假登录。
+    // 登录入口已就位（顶部账号栏），账号系统尚未接入，不做假登录
     ui.on_login_clicked(|| {
-        tracing::info!("登录入口被点击：SECTL-auth 接入尚未实现（见 docs/账号系统接入.md）");
+        tracing::info!("登录入口被点击：账号系统尚未接入");
     });
 
-    // --demo：自动连接并发两条消息，方便截图、录屏与给别人演示。
     if std::env::args().any(|arg| arg == "--demo") {
         schedule_demo(&ui, lang);
     }
-
-    // --preview：启动即开始采集本机画面（配合 --demo 可一次跑出完整截图）。
     if std::env::args().any(|arg| arg == "--preview") {
         bridge::start_preview(ui.as_weak(), lang);
     }
-
-    // --settings：启动即打开设置窗口。
     if std::env::args().any(|arg| arg == "--settings") {
         settings.show()?;
     }
@@ -326,34 +270,114 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 当前字体选择。放在 `Rc<RefCell<..>>` 里，供几个回调共享。
-struct FontState {
+/// 当前外观选择。
+struct UiState {
+    theme_mode: ThemeMode,
+    accent_mode: AccentMode,
+    hue: f32,
+    saturation: f32,
     family: String,
-    weight: u16,
+    weight_tier: u16,
 }
 
-/// 把字体选择推给两个窗口。
-fn apply_font_selection(
+/// 强调色种子：跟随系统时用探测到的系统色，自定义时由色相 + 饱和度算。
+fn accent_seed(state: &UiState, detected: Rgb) -> Rgb {
+    match state.accent_mode {
+        AccentMode::System => detected,
+        AccentMode::Custom => accent_from_hsv(state.hue, state.saturation / 100.0),
+    }
+}
+
+fn color_of(rgb: Rgb) -> slint::Color {
+    slint::Color::from_rgb_u8(rgb.r, rgb.g, rgb.b)
+}
+
+/// 把强调色交给 Slint 的内置风格（Fluent 风格据此推导整套配色）。
+///
+/// 走的是私有 API：`WindowInner::context()` 与 `SlintContext::set_accent_color` 都是 pub，
+/// 但被放在 `private_unstable_api` 里，Slint 升级时不保证兼容。升级 Slint 后要重新确认。
+fn set_accent<C: ComponentHandle>(component: &C, color: slint::Color) {
+    use slint::private_unstable_api::re_exports::WindowInner;
+    WindowInner::from_pub(component.window())
+        .context()
+        .set_accent_color(color);
+}
+
+/// 把强调色推给两个窗口。内置风格据此推导整套配色，布局里的 `Palette.*` 也跟着变。
+fn apply_accent(ui: &AppWindow, settings: &SettingsWindow, state: &UiState, detected: Rgb) {
+    let color = color_of(accent_seed(state, detected));
+    set_accent(ui, color);
+    set_accent(settings, color);
+}
+
+/// 注入外观相关的一切：强调色、设置项的当前值、字体。
+fn apply_appearance(
+    settings: &SettingsWindow,
+    ui: Option<&AppWindow>,
+    state: &UiState,
+    detected: Rgb,
+    _system_scheme: ThemeColorScheme,
     catalog: &FontCatalog,
-    ui: &slint::Weak<AppWindow>,
-    settings: &slint::Weak<SettingsWindow>,
-    family: &str,
-    weight: u16,
     lang: Lang,
 ) {
-    let (Some(ui), Some(settings)) = (ui.upgrade(), settings.upgrade()) else {
-        return;
-    };
-    let resolved = catalog.resolve(family, weight);
-    bridge::apply_fonts(ui.global::<Theme>(), &resolved);
-    bridge::apply_fonts(settings.global::<Theme>(), &resolved);
-    // 字重可能被调整到该字体实际存在的档位，所以下拉框要重新同步
-    push_font_options(&settings, catalog, family, weight, lang);
+    let seed = accent_seed(state, detected);
+    let color = color_of(seed);
+    if let Some(ui) = ui {
+        set_accent(ui, color);
+    }
+    set_accent(settings, color);
+
+    settings.set_accent_mode(state.accent_mode.index());
+    settings.set_hue(state.hue);
+    settings.set_saturation(state.saturation);
+    settings.set_accent_preview(color);
+    settings.set_theme_mode(state.theme_mode.index());
+    settings.set_theme_options(options(&[
+        Key::ThemeFollowSystem,
+        Key::ThemeLight,
+        Key::ThemeDark,
+    ], lang));
+    settings.set_accent_options(options(&[Key::AccentFollowSystem, Key::AccentCustom], lang));
+
+    let resolved = catalog.resolve(&state.family, state.weight_tier);
+    bridge::apply_fonts(settings.global::<UiFont>(), &resolved);
+    if let Some(ui) = ui {
+        bridge::apply_fonts(ui.global::<UiFont>(), &resolved);
+    }
     tracing::info!(
-        requested = %family,
-        resolved_family = %resolved.family,
+        accent = %seed,
+        family = %resolved.family,
         weight = resolved.weight,
-        bold_weight = resolved.bold_weight,
+        "应用外观"
+    );
+}
+
+/// 把一组文案做成下拉框的模型。
+fn options(keys: &[Key], lang: Lang) -> ModelRc<slint::SharedString> {
+    let items: Vec<slint::SharedString> = keys
+        .iter()
+        .map(|key| slint::SharedString::from(key.text(lang)))
+        .collect();
+    ModelRc::new(VecModel::from(items))
+}
+
+fn apply_font(
+    ui: &slint::Weak<AppWindow>,
+    settings: &slint::Weak<SettingsWindow>,
+    catalog: &FontCatalog,
+    state: &UiState,
+) {
+    let resolved = catalog.resolve(&state.family, state.weight_tier);
+    if let Some(ui) = ui.upgrade() {
+        bridge::apply_fonts(ui.global::<UiFont>(), &resolved);
+    }
+    if let Some(settings) = settings.upgrade() {
+        bridge::apply_fonts(settings.global::<UiFont>(), &resolved);
+    }
+    tracing::info!(
+        requested = %state.family,
+        family = %resolved.family,
+        weight = resolved.weight,
         "界面字体已切换"
     );
 }
@@ -362,52 +386,59 @@ fn apply_font_selection(
 fn push_font_options(
     settings: &SettingsWindow,
     catalog: &FontCatalog,
-    family: &str,
-    weight: u16,
+    state: &UiState,
     lang: Lang,
 ) {
     let families = catalog.families();
-    let family_index = families.iter().position(|f| f == family).unwrap_or(0) as i32;
+    let family_index = families.iter().position(|f| f == &state.family).unwrap_or(0) as i32;
 
-    let weights = catalog.selectable_weights(family);
-    // 用解析结果反查下标：这样下拉框显示的就是真正生效的那个字重，
-    // 而不是用户点了但实际不存在的档位。
-    let effective = catalog.resolve(family, weight).weight;
-    let weight_index = weights.iter().position(|w| *w == effective).unwrap_or(0) as i32;
+    let tiers = catalog.selectable_weights(&state.family);
+    let tier = catalog.nearest_tier(&state.family, state.weight_tier);
+    let weight_index = tiers.iter().position(|t| *t == tier).unwrap_or(0) as i32;
 
-    let labels: Vec<slint::SharedString> = weights
+    let weight_labels: Vec<slint::SharedString> = tiers
         .iter()
-        .map(|w| {
-            let name = weight_name(*w, lang);
+        .map(|tier| {
+            let name = weight_name(*tier, lang);
             let text = if name.is_empty() {
-                format!("{w}")
+                format!("{tier}")
             } else {
-                format!("{w}   {name}")
+                format!("{tier}   {name}")
             };
             slint::SharedString::from(text)
         })
         .collect();
 
-    settings.set_families(ModelRc::new(VecModel::from(
-        families
-            .iter()
-            .map(|f| slint::SharedString::from(f.as_str()))
-            .collect::<Vec<_>>(),
-    )));
+    let family_labels: Vec<slint::SharedString> = families
+        .iter()
+        .map(|f| slint::SharedString::from(f.as_str()))
+        .collect();
+    settings.set_families(options_model(family_labels));
     settings.set_family_index(family_index);
-    settings.set_weights(ModelRc::new(VecModel::from(labels)));
+    settings.set_weights(options_model(weight_labels));
     settings.set_weight_index(weight_index);
 }
 
-/// 保存字体选择（保留主题选择）。
-fn save_font(theme_mode: ThemeMode, family: &str, weight: u16) {
-    let updated = Preferences {
-        theme_mode,
-        font_family: family.to_string(),
-        font_weight: weight,
-    };
-    if let Err(err) = updated.save() {
-        tracing::warn!("保存字体偏好失败：{err}");
+/// 下拉框的字符串模型。
+fn options_model(labels: Vec<slint::SharedString>) -> ModelRc<slint::SharedString> {
+    ModelRc::new(VecModel::from(labels))
+}
+fn save(preferences: &Preferences) {
+    // 写盘失败只记录，本次会话的选择仍然生效
+    if let Err(err) = preferences.save() {
+        tracing::warn!("保存偏好失败：{err}");
+    }
+}
+
+/// 从当前状态拼出要落盘的偏好，几个回调共用。
+fn current_prefs(state: &UiState) -> Preferences {
+    Preferences {
+        theme_mode: state.theme_mode,
+        font_family: state.family.clone(),
+        font_weight: state.weight_tier,
+        accent_mode: state.accent_mode,
+        hue: state.hue,
+        saturation: state.saturation,
     }
 }
 
@@ -417,14 +448,12 @@ fn open_logs() {
     }
 }
 
-/// 读取 `--flag value` 形式的参数值。
 fn arg_value(flag: &str) -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     let index = args.iter().position(|arg| arg == flag)?;
     args.get(index + 1).cloned()
 }
 
-/// 版本号显示在「关于」页。编译期确定，不用运行时读。
 fn apply_version(settings: &SettingsWindow) {
     settings.set_version(concat!("v", env!("CARGO_PKG_VERSION")).into());
 }
@@ -438,7 +467,6 @@ fn schedule_demo(ui: &AppWindow, lang: Lang) {
         }
     });
 
-    // 握手需要一点时间，稍后再发消息；两条消息能看出双向链路都通。
     for delay in [2000_u64, 2700] {
         let weak = ui.as_weak();
         slint::Timer::single_shot(Duration::from_millis(delay), move || {
@@ -450,7 +478,7 @@ fn schedule_demo(ui: &AppWindow, lang: Lang) {
     }
 }
 
-/// 初始化日志：写按天滚动的文件，不输出到界面。
+/// 日志写按天滚动的文件，不输出到界面。
 fn init_logging() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     use tracing_subscriber::EnvFilter;
 

@@ -5,9 +5,10 @@
 //! 界面只知道用户选了「哪个字体、哪个字重」，但渲染需要的是
 //! **family 名 + 数值字重**，而且这两者不一定直接对应：
 //!
-//! - 随应用分发的 miSans 只带两个字重文件，且它们的 family 名**不同**
-//!   （`MiSans` 与 `MiSans Demibold`）—— 是独立字体族，不是同族权重。
-//!   所以要靠切换 family 来表达字重，光给 `font-weight` 没用。
+//! - 随应用分发的 miSans 每个字重一个文件，family 名取自 name 表 nameID 1：
+//!   `MiSans Light` / `MiSans` / `MiSans Medium` / `MiSans Demibold` / `MiSans` ——
+//!   Regular 与 Bold 共用 `MiSans`，靠 `font-weight` 区分，其余三个各自成族。
+//!   所以字重主要靠切换 family 表达。
 //! - 系统字体反过来：同族内有多个权重，靠 `font-weight` 挑；
 //!   但**字体不一定有用户想要的权重**（很多中文字体只有 Regular + Bold），
 //!   所以要挑一个实际存在的最近权重，否则渲染器会去合成假粗体。
@@ -19,17 +20,38 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 随应用分发的 miSans 在界面上的 family 名（与字体内部一致）。
 pub const BUILTIN_FAMILY: &str = "MiSans";
 
-/// 内置 miSans 的粗体 family 名。
+/// 内置 miSans 的字重档位，依次对应 Light / Regular / Medium / Demibold / Bold。
 ///
-/// ⚠️ 这是 **miSans 自己的另一套 family**，不是 `MiSans` 的权重。
-/// 上游静态字体每个字重一个 family，这一点有测试钉着。
-pub const BUILTIN_BOLD_FAMILY: &str = "MiSans Demibold";
-
-/// 内置 miSans 实际带的字重（Regular 400 / Demibold 600）。
-pub const BUILTIN_WEIGHTS: [u16; 2] = [400, 600];
+/// 档位是对外的通用值，用于界面展示；实际渲染用的字重见 [`builtin_render_weight`]。
+pub const BUILTIN_WEIGHTS: [u16; 5] = [300, 400, 500, 600, 700];
 
 /// 默认字重。
 pub const DEFAULT_WEIGHT: u16 = 400;
+
+/// 档位 → 字体文件里真实的 `usWeightClass`。
+///
+/// 这五个文件的实测值是非标准的 250/330/380/450/630，必须原样传给渲染器。
+/// 传通用值是错的：传 400 时渲染器会在 250/330/380/450/630 里挑最近的 380
+/// （Medium），而不是正文字重 330（Regular）。
+pub fn builtin_render_weight(weight: u16) -> u16 {
+    match weight {
+        300 => 250,
+        500 => 380,
+        600 => 450,
+        700 => 630,
+        // 400 与未知值都当作 Regular
+        _ => 330,
+    }
+}
+
+/// 内置字体在渲染器里**只有一个 family**。
+///
+/// 这五个文件的 nameID 16（排版族名）都是 `MiSans`，而 fontique 注册字体时优先取它，
+/// 所以 `"MiSans Light"` 这类名字在渲染器里并不存在，写上去会落到回退字体。
+/// 区分字重只能靠 `font-weight`。
+pub fn builtin_family(_weight: u16) -> &'static str {
+    BUILTIN_FAMILY
+}
 
 /// 标准字重档位，用于没有字重信息的兜底。
 const STANDARD_WEIGHTS: [u16; 9] = [100, 200, 300, 400, 500, 600, 700, 800, 900];
@@ -48,14 +70,12 @@ pub struct FontEntry {
 /// 解析结果：渲染这个界面实际要用的 family 与字重。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedFont {
-    /// 常规文字用。
+    /// 渲染用的 family 名。
     pub family: String,
-    /// 强调文字用（通常更粗）。
-    pub bold_family: String,
-    /// 常规文字字重。
+    /// 渲染用的字重（字体真实值，不是界面档位）。
     pub weight: u16,
-    /// 强调文字字重。
-    pub bold_weight: u16,
+    /// 界面档位，用于反查下拉框下标。
+    pub tier: u16,
 }
 
 /// 系统字体目录。构造一次即可，查询是纯内存操作。
@@ -152,11 +172,29 @@ impl FontCatalog {
         self.entries.iter().any(|e| e.family == family)
     }
 
+    /// 把请求的字重就近落到某个字体族实际提供的档位。
+    ///
+    /// 界面用它反查下拉框下标，避免"用户点了 500、实际渲染 400、下拉框还显示 500"。
+    pub fn nearest_tier(&self, family: &str, weight: u16) -> u16 {
+        let family = if self.contains(family) {
+            family
+        } else {
+            BUILTIN_FAMILY
+        };
+        let available = if family == BUILTIN_FAMILY {
+            BUILTIN_WEIGHTS.to_vec()
+        } else {
+            self.selectable_weights(family)
+        };
+        nearest_weight(&available, weight)
+    }
+
     /// 把「字体 + 期望字重」解析成渲染参数。
     ///
     /// 字体不存在时回退到内置 miSans —— 用户可能卸载了之前选的字体，
     /// 这时候界面必须还能正常显示，而不是变成一堆方框。
     pub fn resolve(&self, family: &str, weight: u16) -> ResolvedFont {
+        let tier = self.nearest_tier(family, weight);
         let family = if self.contains(family) {
             family
         } else {
@@ -164,33 +202,19 @@ impl FontCatalog {
         };
 
         if family == BUILTIN_FAMILY {
-            // 内置：靠切换 family 表达字重（两个文件是独立字体族）
-            let bold = weight >= 600;
+            // 内置：family 恒为 "MiSans"，字重取档位对应的真实 usWeightClass
             return ResolvedFont {
-                family: if bold { BUILTIN_BOLD_FAMILY } else { BUILTIN_FAMILY }.to_string(),
-                bold_family: BUILTIN_BOLD_FAMILY.to_string(),
-                weight: if bold { 600 } else { 400 },
-                bold_weight: 600,
+                family: BUILTIN_FAMILY.to_string(),
+                weight: builtin_render_weight(tier),
+                tier,
             };
         }
 
-        // 系统字体：同族内挑实际存在的最近权重
-        let available = self.weights(family);
-        let available = if available.is_empty() {
-            STANDARD_WEIGHTS.to_vec()
-        } else {
-            available
-        };
-        let normal = nearest_weight(&available, weight);
-        // 强调文字至少要和常规有区分度；再挑一个实际存在的权重
-        let bold_target = normal.max(700);
-        let bold = nearest_weight(&available, bold_target);
-
+        // 系统字体：同族内挑实际存在的最近权重，档位就是该权重本身
         ResolvedFont {
             family: family.to_string(),
-            bold_family: family.to_string(),
-            weight: normal,
-            bold_weight: bold,
+            weight: tier,
+            tier,
         }
     }
 }
@@ -209,25 +233,77 @@ mod tests {
     use super::*;
 
     #[test]
-    fn 内置_misans_靠切换字体族表达字重() {
+    fn 内置字体只有一个_family() {
         let catalog = FontCatalog::builtin_only();
 
-        let regular = catalog.resolve(BUILTIN_FAMILY, 400);
-        assert_eq!(regular.family, "MiSans");
-        assert_eq!(regular.weight, 400);
-        // 强调文字换成另一个 family，而不是靠 font-weight
-        assert_eq!(regular.bold_family, "MiSans Demibold");
-        assert_eq!(regular.bold_weight, 600);
-
-        let bold = catalog.resolve(BUILTIN_FAMILY, 600);
-        assert_eq!(bold.family, "MiSans Demibold");
-        assert_eq!(bold.weight, 600);
+        // 五个文件在渲染器里同属 "MiSans"，family 名区分不了字重
+        for tier in BUILTIN_WEIGHTS {
+            assert_eq!(catalog.resolve(BUILTIN_FAMILY, tier).family, "MiSans", "档位 {tier}");
+        }
     }
 
     #[test]
-    fn 内置字重只有两档() {
-        assert_eq!(BUILTIN_WEIGHTS, [400, 600]);
-        assert_eq!(FontCatalog::builtin_only().weights(BUILTIN_FAMILY), vec![400, 600]);
+    fn 内置档位映射到真实字重() {
+        let catalog = FontCatalog::builtin_only();
+
+        // 渲染器只认 font-weight，所以必须传字体文件里的真实 usWeightClass
+        for (tier, render) in [(300, 250), (400, 330), (500, 380), (600, 450), (700, 630)] {
+            let resolved = catalog.resolve(BUILTIN_FAMILY, tier);
+            assert_eq!(resolved.weight, render, "档位 {tier}");
+            assert_eq!(resolved.tier, tier);
+        }
+        assert_eq!(builtin_render_weight(DEFAULT_WEIGHT), 330, "默认档位要落到 Regular");
+    }
+
+    #[test]
+    fn 内置字重是五档() {
+        assert_eq!(BUILTIN_WEIGHTS, [300, 400, 500, 600, 700]);
+        assert_eq!(
+            FontCatalog::builtin_only().weights(BUILTIN_FAMILY),
+            vec![300, 400, 500, 600, 700]
+        );
+    }
+
+    #[test]
+    fn 内置字重就近落档() {
+        let catalog = FontCatalog::builtin_only();
+
+        // 450 到 400 和 500 一样近，取较小
+        assert_eq!(catalog.resolve(BUILTIN_FAMILY, 450).tier, 400);
+        assert_eq!(catalog.resolve(BUILTIN_FAMILY, 500).tier, 500);
+        // 651 离 700（差 49）比离 600（差 51）近
+        assert_eq!(catalog.resolve(BUILTIN_FAMILY, 651).tier, 700);
+        assert_eq!(catalog.resolve(BUILTIN_FAMILY, 100).tier, 300);
+        assert_eq!(catalog.resolve(BUILTIN_FAMILY, 900).tier, 700);
+
+        // 档位必须是内置档位之一，否则界面反查下拉框下标会落空
+        for requested in [100, 300, 350, 400, 450, 500, 650, 900] {
+            let tier = catalog.resolve(BUILTIN_FAMILY, requested).tier;
+            assert!(BUILTIN_WEIGHTS.contains(&tier), "{requested} 落到了 {tier}");
+        }
+    }
+
+    #[test]
+    fn 五个档位映射到互不相同的真实字重() {
+        // 否则渲染器会把两个档位解析成同一个字体面
+        let mut weights: Vec<u16> = BUILTIN_WEIGHTS
+            .iter()
+            .map(|tier| builtin_render_weight(*tier))
+            .collect();
+        let before = weights.len();
+        weights.sort_unstable();
+        weights.dedup();
+        assert_eq!(weights.len(), before, "真实字重有重复");
+    }
+
+    #[test]
+    fn 档位越大真实字重越大() {
+        for pair in BUILTIN_WEIGHTS.windows(2) {
+            assert!(
+                builtin_render_weight(pair[0]) < builtin_render_weight(pair[1]),
+                "档位 {pair:?} 的真实字重没有递增"
+            );
+        }
     }
 
     #[test]
@@ -241,6 +317,8 @@ mod tests {
         let catalog = FontCatalog::builtin_only();
         let resolved = catalog.resolve("这个字体不存在", 400);
         assert_eq!(resolved.family, "MiSans");
+        assert_eq!(resolved.tier, 400);
+        assert_eq!(resolved.weight, 330, "回退后应落到 miSans 的 Regular");
         assert!(!catalog.contains("这个字体不存在"));
     }
 
@@ -265,16 +343,13 @@ mod tests {
         // 想要 500 → 实际只能给 400 或 700，同样近时取较小
         let medium = catalog.resolve("只有两档的字体", 500);
         assert_eq!(medium.weight, 400, "500 到 400 和 700 一样近，应取较小");
-        // 强调文字要真的更粗
-        assert_eq!(medium.bold_weight, 700);
 
         // 想要 900 → 给 700
         assert_eq!(catalog.resolve("只有两档的字体", 900).weight, 700);
         // 想要 100 → 给 400
         assert_eq!(catalog.resolve("只有两档的字体", 100).weight, 400);
-        // 系统字体的粗体是同族，靠 font-weight 生效
-        let r = catalog.resolve("只有两档的字体", 400);
-        assert_eq!(r.family, r.bold_family);
+        // 系统字体的 family 名原样透传
+        assert_eq!(catalog.resolve("只有两档的字体", 400).family, "只有两档的字体");
     }
 
     #[test]
@@ -294,6 +369,7 @@ mod tests {
         assert_eq!(families[0], BUILTIN_FAMILY);
 
         let resolved = catalog.resolve(BUILTIN_FAMILY, DEFAULT_WEIGHT);
+        assert!(BUILTIN_WEIGHTS.contains(&resolved.tier));
         assert_eq!(resolved.family, "MiSans");
     }
 }

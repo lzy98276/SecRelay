@@ -14,13 +14,14 @@
 use std::path::PathBuf;
 
 use crate::fonts::{BUILTIN_FAMILY, DEFAULT_WEIGHT};
+use crate::palette::AccentMode;
 use crate::ThemeMode;
 
 /// 配置文件名。
 const FILE_NAME: &str = "config.txt";
 
 /// 本地偏好。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Preferences {
     /// 主题模式，默认跟随系统。
     pub theme_mode: ThemeMode,
@@ -28,6 +29,12 @@ pub struct Preferences {
     pub font_family: String,
     /// 界面字重，默认 400。
     pub font_weight: u16,
+    /// 强调色模式，默认跟随系统。
+    pub accent_mode: AccentMode,
+    /// 自定义强调色的色相（0-360）。
+    pub hue: f32,
+    /// 自定义强调色的饱和度（0-100）。
+    pub saturation: f32,
 }
 
 impl Default for Preferences {
@@ -36,6 +43,9 @@ impl Default for Preferences {
             theme_mode: ThemeMode::System,
             font_family: BUILTIN_FAMILY.to_string(),
             font_weight: DEFAULT_WEIGHT,
+            accent_mode: AccentMode::System,
+            hue: 28.0,
+            saturation: 78.0,
         }
     }
 }
@@ -108,6 +118,25 @@ impl Preferences {
                         }
                     }
                 }
+                "accent" => {
+                    if let Some(mode) = AccentMode::from_key(value) {
+                        prefs.accent_mode = mode;
+                    }
+                }
+                "hue" => {
+                    if let Ok(hue) = value.parse::<f32>() {
+                        if (0.0..=360.0).contains(&hue) {
+                            prefs.hue = hue;
+                        }
+                    }
+                }
+                "saturation" => {
+                    if let Ok(saturation) = value.parse::<f32>() {
+                        if (0.0..=100.0).contains(&saturation) {
+                            prefs.saturation = saturation;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -122,12 +151,21 @@ impl Preferences {
              # theme:       system / light / dark\n\
              # font_family: 系统里任意已安装字体的名字，misans 内置字体叫 MiSans\n\
              # font_weight: 100 - 900，实际会用该字体最接近的可用字重\n\
+             # accent:      system / custom\n\
+             # hue:         0 - 360（仅 accent=custom 时生效）\n\
+             # saturation:  0 - 100（仅 accent=custom 时生效）\n\
              theme={}\n\
              font_family={}\n\
-             font_weight={}\n",
+             font_weight={}\n\
+             accent={}\n\
+             hue={}\n\
+             saturation={}\n",
             self.theme_mode.key(),
             self.font_family,
-            self.font_weight
+            self.font_weight,
+            self.accent_mode.key(),
+            self.hue,
+            self.saturation
         )
     }
 }
@@ -148,15 +186,30 @@ mod tests {
     fn 往返一致() {
         for mode in ThemeMode::ALL {
             for weight in [100_u16, 400, 600, 900] {
-                let prefs = Preferences {
-                    theme_mode: mode,
-                    font_family: "微软雅黑".to_string(),
-                    font_weight: weight,
-                };
-                let text = prefs.serialize();
-                assert_eq!(Preferences::parse(&text), prefs, "往返不一致：{text}");
+                for accent_mode in AccentMode::ALL {
+                    let prefs = Preferences {
+                        theme_mode: mode,
+                        font_family: "微软雅黑".to_string(),
+                        font_weight: weight,
+                        accent_mode,
+                        hue: 123.5,
+                        saturation: 42.0,
+                    };
+                    let text = prefs.serialize();
+                    assert_eq!(Preferences::parse(&text), prefs, "往返不一致：{text}");
+                }
             }
         }
+    }
+
+    #[test]
+    fn 强调色字段的边界() {
+        assert_eq!(Preferences::parse("hue=400").hue, 28.0, "越界色相应被忽略");
+        assert_eq!(Preferences::parse("hue=-1").hue, 28.0);
+        assert_eq!(Preferences::parse("saturation=200").saturation, 78.0);
+        assert_eq!(Preferences::parse("hue=200.5").hue, 200.5);
+        assert_eq!(Preferences::parse("accent=custom").accent_mode, AccentMode::Custom);
+        assert_eq!(Preferences::parse("accent=乱写").accent_mode, AccentMode::System);
     }
 
     #[test]

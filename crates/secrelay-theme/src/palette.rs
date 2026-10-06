@@ -85,7 +85,71 @@ impl ColorScheme {
     }
 }
 
-/// 一套完整的界面颜色。
+/// 强调色的来源模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccentMode {
+    /// 跟随系统主题色。
+    #[default]
+    System,
+    /// 用户自定义（由色相 + 饱和度决定）。
+    Custom,
+}
+
+impl AccentMode {
+    pub const ALL: [AccentMode; 2] = [AccentMode::System, AccentMode::Custom];
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key.trim().to_ascii_lowercase().as_str() {
+            "system" => Some(AccentMode::System),
+            "custom" => Some(AccentMode::Custom),
+            _ => None,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            AccentMode::System => "system",
+            AccentMode::Custom => "custom",
+        }
+    }
+
+    pub fn index(self) -> i32 {
+        match self {
+            AccentMode::System => 0,
+            AccentMode::Custom => 1,
+        }
+    }
+
+    pub fn from_index(index: i32) -> Self {
+        Self::ALL.get(index.max(0) as usize).copied().unwrap_or_default()
+    }
+}
+
+/// 色相与饱和度构成的强调色。
+///
+/// 饱和度按 sRGB 的 HSV 定义（0 = 灰，1 = 最艳）。
+pub fn accent_from_hsv(hue: f32, saturation: f32) -> Rgb {
+    let hue = hue.rem_euclid(360.0);
+    let saturation = saturation.clamp(0.0, 1.0);
+    // 固定明度，避免用户在色盘上把颜色调到看不清
+    let value = 0.85_f32;
+
+    let c = value * saturation;
+    let h = hue / 60.0;
+    let x = c * (1.0 - (h % 2.0 - 1.0).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = value - c;
+    let to_u8 = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Rgb::new(to_u8(r), to_u8(g), to_u8(b))
+}
+
 ///
 /// 字段与 `ui/app.slint` 里 `Theme` 全局的属性一一对应 —— 两边改动必须同步，
 /// 所以这里用 `#[derive]` 之外的显式结构，而不是一个 `HashMap<String, Rgb>`。

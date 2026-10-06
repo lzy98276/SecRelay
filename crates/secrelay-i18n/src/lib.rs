@@ -142,6 +142,11 @@ pub enum Key {
     SettingsLanguageHint,
     SettingsTheme,
     SettingsThemeHint,
+    SettingsAccent,
+    AccentFollowSystem,
+    AccentCustom,
+    SettingsHue,
+    SettingsSaturation,
     SettingsFont,
     SettingsFontHint,
     SettingsFontFamily,
@@ -251,6 +256,11 @@ impl Key {
         Key::SettingsLanguageHint,
         Key::SettingsTheme,
         Key::SettingsThemeHint,
+        Key::SettingsAccent,
+        Key::AccentFollowSystem,
+        Key::AccentCustom,
+        Key::SettingsHue,
+        Key::SettingsSaturation,
         Key::SettingsFont,
         Key::SettingsFontHint,
         Key::SettingsFontFamily,
@@ -362,6 +372,11 @@ impl Key {
             Key::SettingsLanguageHint => "目前仅提供简体中文，其它语言后续添加",
             Key::SettingsTheme => "主题",
             Key::SettingsThemeHint => "跟随系统会随系统的深浅色偏好自动切换",
+            Key::SettingsAccent => "主题色",
+            Key::AccentFollowSystem => "跟随系统",
+            Key::AccentCustom => "自定义",
+            Key::SettingsHue => "色相",
+            Key::SettingsSaturation => "饱和度",
             Key::SettingsFont => "界面字体",
             Key::SettingsFontHint => "列出系统里已安装的字体；字重按所选字体实际提供的档位显示",
             Key::SettingsFontFamily => "字体",
@@ -478,7 +493,7 @@ mod tests {
         // 防止新增 Key 变体后忘记加进 ALL —— 那样上面的穷尽检查会漏掉它。
         // Rust 无法在不引宏的情况下枚举枚举变体，所以这里用一个数字做绊线：
         // 变体数一变，这个测试就失败，提醒维护者同步 ALL。
-        const EXPECTED: usize = 89;
+        const EXPECTED: usize = 94;
         assert_eq!(
             Key::ALL.len(),
             EXPECTED,
